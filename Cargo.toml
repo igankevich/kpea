@@ -1,0 +1,13 @@
+[package]
+name = "cpio"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+normalize-path = "0.2.1"
+walkdir = "2.5.0"
+
+[dev-dependencies]
+arbitrary = { version = "1.4.1", features = ["derive", "derive_arbitrary"] }
+arbtest = "0.3.1"
+tempfile = "3.14.0"
