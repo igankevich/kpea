@@ -15,46 +15,58 @@ use std::str::from_utf8;
 use normalize_path::NormalizePath;
 use walkdir::WalkDir;
 
+use crate::major;
+use crate::makedev;
+use crate::minor;
+
 pub struct CpioBuilder<W: Write> {
-    writer: Box<W>,
+    writer: W,
     max_inode: u32,
+    format: Format,
 }
 
 impl<W: Write> CpioBuilder<W> {
     pub fn new(writer: W) -> Self {
         Self {
-            writer: Box::new(writer),
+            writer,
             max_inode: 0,
+            format: Format::Newc,
         }
     }
 
     pub fn write_entry<P: AsRef<Path>, R: Read>(
         &mut self,
-        mut header: OdcHeader,
+        mut header: Header,
         name: P,
         mut data: R,
-    ) -> Result<OdcHeader, Error> {
+    ) -> Result<Header, Error> {
         self.fix_header(&mut header, name.as_ref())?;
         header.write(self.writer.by_ref())?;
-        write_path(self.writer.by_ref(), name)?;
-        std::io::copy(&mut data, self.writer.by_ref())?;
+        write_path(self.writer.by_ref(), name, self.format)?;
+        let n = std::io::copy(&mut data, self.writer.by_ref())?;
+        if matches!(self.format, Format::Newc | Format::NewCrc) {
+            write_padding(self.writer.by_ref(), n as usize)?;
+        }
         Ok(header)
     }
 
     pub fn write_entry_using_writer<P, F>(
         &mut self,
-        mut header: OdcHeader,
+        mut header: Header,
         name: P,
         mut write: F,
-    ) -> Result<OdcHeader, Error>
+    ) -> Result<Header, Error>
     where
         P: AsRef<Path>,
-        F: FnMut(&mut W) -> Result<(), Error>,
+        F: FnMut(&mut W) -> Result<u64, Error>,
     {
         self.fix_header(&mut header, name.as_ref())?;
         header.write(self.writer.by_ref())?;
-        write_path(self.writer.by_ref(), name)?;
-        write(self.writer.by_ref())?;
+        write_path(self.writer.by_ref(), name, self.format)?;
+        let n = write(self.writer.by_ref())?;
+        if matches!(self.format, Format::Newc | Format::NewCrc) {
+            write_padding(self.writer.by_ref(), n as usize)?;
+        }
         Ok(header)
     }
 
@@ -73,7 +85,8 @@ impl<W: Write> CpioBuilder<W> {
                 continue;
             }
             let metadata = entry.path().metadata()?;
-            let header: OdcHeader = metadata.try_into()?;
+            let mut header: Header = metadata.try_into()?;
+            header.format = builder.format;
             builder.write_entry(header, entry_path, File::open(entry.path())?)?;
         }
         let writer = builder.finish()?;
@@ -90,11 +103,13 @@ impl<W: Write> CpioBuilder<W> {
 
     pub fn finish(mut self) -> Result<W, Error> {
         self.write_trailer()?;
-        Ok(*self.writer)
+        Ok(self.writer)
     }
 
     fn write_trailer(&mut self) -> Result<(), Error> {
-        let header = OdcHeader {
+        let len = TRAILER.to_bytes_with_nul().len();
+        let header = Header {
+            format: self.format,
             dev: 0,
             ino: 0,
             mode: 0,
@@ -103,18 +118,25 @@ impl<W: Write> CpioBuilder<W> {
             nlink: 0,
             rdev: 0,
             mtime: 0,
-            name_len: TRAILER.to_bytes_with_nul().len() as u32,
+            name_len: len as u32,
             file_size: 0,
         };
         header.write(self.writer.by_ref())?;
         write_c_str(self.writer.by_ref(), TRAILER)?;
+        if matches!(self.format, Format::Newc | Format::NewCrc) {
+            write_padding(self.writer.by_ref(), NEWC_HEADER_LEN + len)?;
+        }
         Ok(())
     }
 
-    fn fix_header(&mut self, header: &mut OdcHeader, name: &Path) -> Result<(), Error> {
+    fn fix_header(&mut self, header: &mut Header, name: &Path) -> Result<(), Error> {
         let name_len = name.as_os_str().as_bytes().len();
+        let max = match self.format {
+            Format::Newc | Format::NewCrc => MAX_8,
+            Format::Odc => MAX_6,
+        };
         // -1 due to null byte
-        if name_len > MAX_6 as usize - 1 {
+        if name_len > max as usize - 1 {
             return Err(Error::other("file name is too long"));
         }
         // +1 due to null byte
@@ -129,14 +151,6 @@ impl<W: Write> CpioBuilder<W> {
         old
     }
 }
-
-/* TODO ????
-impl<W: Write> Drop for CpioBuilder<W> {
-    fn drop(&mut self) {
-        let _ = self.write_trailer();
-    }
-}
-*/
 
 pub struct CpioArchive<R: Read> {
     reader: R,
@@ -164,14 +178,18 @@ impl<R: Read> CpioArchive<R> {
     }
 
     fn read_entry(&mut self) -> Result<Option<Entry<R>>, Error> {
-        let Some(header) = OdcHeader::read_some(self.reader.by_ref())? else {
+        let Some(header) = Header::read_some(self.reader.by_ref())? else {
             return Ok(None);
         };
-        let name = read_path_buf(self.reader.by_ref(), header.name_len as usize)?;
+        let name = read_path_buf(
+            self.reader.by_ref(),
+            header.name_len as usize,
+            header.format,
+        )?;
         if name.as_os_str().as_bytes() == TRAILER.to_bytes() {
             return Ok(None);
         }
-        let n = header.file_size as u64;
+        let n = header.file_size;
         Ok(Some(Entry {
             header,
             name,
@@ -181,9 +199,29 @@ impl<R: Read> CpioArchive<R> {
 }
 
 pub struct Entry<'a, R: Read> {
-    pub header: OdcHeader,
+    pub header: Header,
     pub name: PathBuf,
+    // TODO can't move out
     pub reader: Take<&'a mut R>,
+}
+
+impl<'a, R: Read> Entry<'a, R> {
+    fn read_to_end(&mut self) -> Result<(), Error> {
+        // discard the remaining bytes
+        std::io::copy(&mut self.reader, &mut std::io::sink())?;
+        // handle padding
+        if matches!(self.header.format, Format::Newc | Format::NewCrc) {
+            let n = self.header.file_size as usize;
+            read_padding(self.reader.get_mut(), n)?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a, R: Read> Drop for Entry<'a, R> {
+    fn drop(&mut self) {
+        let _ = self.read_to_end();
+    }
 }
 
 pub struct Iter<'a, R: Read> {
@@ -223,147 +261,277 @@ impl<'a, R: Read> Iterator for Iter<'a, R> {
 
 impl<'a, R: Read> FusedIterator for Iter<'a, R> {}
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
+pub enum Format {
+    Odc,
+    Newc,
+    NewCrc,
+}
+
 // https://people.freebsd.org/~kientzle/libarchive/man/cpio.5.txt
 #[derive(Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq, Debug))]
-pub struct OdcHeader {
-    pub dev: u32,
+pub struct Header {
+    pub format: Format,
+    pub dev: u64,
     pub ino: u32,
     pub mode: u32,
     pub uid: u32,
     pub gid: u32,
     pub nlink: u32,
-    pub rdev: u32,
+    pub rdev: u64,
     pub mtime: u64,
     name_len: u32,
     pub file_size: u64,
 }
 
-impl OdcHeader {
+impl Header {
     fn read_some<R: Read>(mut reader: R) -> Result<Option<Self>, Error> {
-        let mut bytes = [0_u8; ODC_HEADER_LEN];
-        let nread = reader.read(&mut bytes[..])?;
-        if nread == 0 {
+        let mut magic = [0_u8; MAGIC_LEN];
+        let nread = reader.read(&mut magic[..])?;
+        if nread != MAGIC_LEN {
             return Ok(None);
         }
-        let header = Self::read(&bytes[..])?;
+        let header = Self::do_read(reader, magic)?;
         Ok(Some(header))
     }
 
+    #[allow(unused)]
     fn read<R: Read>(mut reader: R) -> Result<Self, Error> {
-        let mut magic = [0_u8; 6];
+        let mut magic = [0_u8; MAGIC_LEN];
         reader.read_exact(&mut magic[..])?;
-        if magic != MAGIC {
-            return Err(Error::other("not cpio odc"));
+        Self::do_read(reader, magic)
+    }
+
+    fn do_read<R: Read>(reader: R, magic: [u8; MAGIC_LEN]) -> Result<Self, Error> {
+        let format = if magic == ODC_MAGIC {
+            Format::Odc
+        } else if magic == NEWC_MAGIC {
+            Format::Newc
+        } else if magic == NEWCRC_MAGIC {
+            Format::NewCrc
+        } else {
+            return Err(Error::other("not a cpio file"));
+        };
+        match format {
+            Format::Odc => Self::read_odc(reader),
+            Format::Newc | Format::NewCrc => Self::read_newc(reader),
         }
-        let dev = read_6(reader.by_ref())?;
-        let ino = read_6(reader.by_ref())?;
-        let mode = read_6(reader.by_ref())?;
-        let uid = read_6(reader.by_ref())?;
-        let gid = read_6(reader.by_ref())?;
-        let nlink = read_6(reader.by_ref())?;
-        let rdev = read_6(reader.by_ref())?;
-        let mtime = read_11(reader.by_ref())?;
-        let name_len = read_6(reader.by_ref())?;
-        let file_size = read_11(reader.by_ref())?;
+    }
+
+    fn write<W: Write>(&self, writer: W) -> Result<(), Error> {
+        match self.format {
+            Format::Odc => self.write_odc(writer),
+            Format::Newc | Format::NewCrc => self.write_newc(writer),
+        }
+    }
+
+    fn read_odc<R: Read>(mut reader: R) -> Result<Self, Error> {
+        let dev = read_octal_6(reader.by_ref())?;
+        let ino = read_octal_6(reader.by_ref())?;
+        let mode = read_octal_6(reader.by_ref())?;
+        let uid = read_octal_6(reader.by_ref())?;
+        let gid = read_octal_6(reader.by_ref())?;
+        let nlink = read_octal_6(reader.by_ref())?;
+        let rdev = read_octal_6(reader.by_ref())?;
+        let mtime = read_octal_11(reader.by_ref())?;
+        let name_len = read_octal_6(reader.by_ref())?;
+        let file_size = read_octal_11(reader.by_ref())?;
         Ok(Self {
-            dev,
+            format: Format::Odc,
+            dev: dev as u64,
             ino,
             mode,
             uid,
             gid,
             nlink,
-            rdev,
+            rdev: rdev as u64,
             mtime,
             name_len,
             file_size,
         })
     }
 
-    fn write<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        writer.write_all(&MAGIC[..])?;
-        write_6(writer.by_ref(), self.dev)?;
-        write_6(writer.by_ref(), self.ino)?;
-        write_6(writer.by_ref(), self.mode)?;
-        write_6(writer.by_ref(), self.uid)?;
-        write_6(writer.by_ref(), self.gid)?;
-        write_6(writer.by_ref(), self.nlink)?;
-        write_6(writer.by_ref(), self.rdev)?;
-        write_11(writer.by_ref(), self.mtime)?;
-        write_6(writer.by_ref(), self.name_len)?;
-        write_11(writer.by_ref(), self.file_size)?;
+    fn write_odc<W: Write>(&self, mut writer: W) -> Result<(), Error> {
+        writer.write_all(&ODC_MAGIC[..])?;
+        write_octal_6(
+            writer.by_ref(),
+            self.dev
+                .try_into()
+                .map_err(|_| Error::other("dev value is too large"))?,
+        )?;
+        write_octal_6(writer.by_ref(), self.ino)?;
+        write_octal_6(writer.by_ref(), self.mode)?;
+        write_octal_6(writer.by_ref(), self.uid)?;
+        write_octal_6(writer.by_ref(), self.gid)?;
+        write_octal_6(writer.by_ref(), self.nlink)?;
+        write_octal_6(
+            writer.by_ref(),
+            self.rdev
+                .try_into()
+                .map_err(|_| Error::other("rdev value is too large"))?,
+        )?;
+        write_octal_11(writer.by_ref(), zero_on_overflow(self.mtime, MAX_11))?;
+        write_octal_6(writer.by_ref(), self.name_len)?;
+        write_octal_11(writer.by_ref(), self.file_size)?;
+        Ok(())
+    }
+
+    fn read_newc<R: Read>(mut reader: R) -> Result<Self, Error> {
+        let ino = read_hex_8(reader.by_ref())?;
+        let mode = read_hex_8(reader.by_ref())?;
+        let uid = read_hex_8(reader.by_ref())?;
+        let gid = read_hex_8(reader.by_ref())?;
+        let nlink = read_hex_8(reader.by_ref())?;
+        let mtime = read_hex_8(reader.by_ref())?;
+        let file_size = read_hex_8(reader.by_ref())?;
+        let dev_major = read_hex_8(reader.by_ref())?;
+        let dev_minor = read_hex_8(reader.by_ref())?;
+        let rdev_major = read_hex_8(reader.by_ref())?;
+        let rdev_minor = read_hex_8(reader.by_ref())?;
+        let name_len = read_hex_8(reader.by_ref())?;
+        let _check = read_hex_8(reader.by_ref())?;
+        Ok(Self {
+            format: Format::Newc,
+            dev: makedev(dev_major, dev_minor),
+            ino,
+            mode,
+            uid,
+            gid,
+            nlink,
+            rdev: makedev(rdev_major, rdev_minor),
+            mtime: mtime as u64,
+            name_len,
+            file_size: file_size as u64,
+        })
+    }
+
+    fn write_newc<W: Write>(&self, mut writer: W) -> Result<(), Error> {
+        writer.write_all(&NEWC_MAGIC[..])?;
+        write_hex_8(writer.by_ref(), self.ino)?;
+        write_hex_8(writer.by_ref(), self.mode)?;
+        write_hex_8(writer.by_ref(), self.uid)?;
+        write_hex_8(writer.by_ref(), self.gid)?;
+        write_hex_8(writer.by_ref(), self.nlink)?;
+        write_hex_8(
+            writer.by_ref(),
+            zero_on_overflow(self.mtime, MAX_8 as u64) as u32,
+        )?;
+        write_hex_8(
+            writer.by_ref(),
+            self.file_size
+                .try_into()
+                .map_err(|_| Error::other("file is too large"))?,
+        )?;
+        write_hex_8(writer.by_ref(), major(self.dev))?;
+        write_hex_8(writer.by_ref(), minor(self.dev))?;
+        write_hex_8(writer.by_ref(), major(self.rdev))?;
+        write_hex_8(writer.by_ref(), minor(self.rdev))?;
+        write_hex_8(writer.by_ref(), self.name_len)?;
+        // check
+        write_hex_8(writer.by_ref(), 0)?;
         Ok(())
     }
 }
 
-impl TryFrom<Metadata> for OdcHeader {
+const fn zero_on_overflow(value: u64, max: u64) -> u64 {
+    if value > max {
+        0
+    } else {
+        value
+    }
+}
+
+impl TryFrom<Metadata> for Header {
     type Error = Error;
     fn try_from(other: Metadata) -> Result<Self, Error> {
         use std::os::unix::fs::MetadataExt;
-        let mut mtime = other.mtime() as u64;
-        if mtime > MAX_11 {
-            mtime = 0;
-        }
         Ok(Self {
-            dev: other.dev() as u32,
+            // TODO
+            format: Format::Odc,
+            dev: other.dev(),
             ino: other.ino() as u32,
             mode: other.mode(),
             uid: other.uid(),
             gid: other.gid(),
             nlink: other.nlink() as u32,
-            rdev: other.rdev() as u32,
-            mtime,
+            rdev: other.rdev(),
+            mtime: other.mtime() as u64,
             name_len: 0,
-            file_size: other
-                .size()
-                .try_into()
-                .map_err(|_| Error::other("file is too large"))?,
+            file_size: other.size(),
         })
     }
 }
 
-fn read_6<R: Read>(mut reader: R) -> Result<u32, Error> {
+fn read_octal_6<R: Read>(mut reader: R) -> Result<u32, Error> {
     let mut buf = [0_u8; 6];
     reader.read_exact(&mut buf[..])?;
     let s = from_utf8(&buf[..]).map_err(|_| Error::other("invalid octal number"))?;
     u32::from_str_radix(s, 8).map_err(|_| Error::other("invalid octal number"))
 }
 
-fn write_6<W: Write>(mut writer: W, value: u32) -> Result<(), Error> {
+fn write_octal_6<W: Write>(mut writer: W, value: u32) -> Result<(), Error> {
     if value > MAX_6 {
-        return Err(Error::other("6-character value is too large"));
+        return Err(Error::other("6-character octal value is too large"));
     }
     let s = format!("{:06o}", value);
     writer.write_all(s.as_bytes())
 }
 
-fn read_11<R: Read>(mut reader: R) -> Result<u64, Error> {
+fn read_hex_8<R: Read>(mut reader: R) -> Result<u32, Error> {
+    let mut buf = [0_u8; 8];
+    reader.read_exact(&mut buf[..])?;
+    let s = from_utf8(&buf[..]).map_err(|_| Error::other("invalid hexadecimal number"))?;
+    u32::from_str_radix(s, 16).map_err(|_| Error::other("invalid hexadecimal number"))
+}
+
+fn write_hex_8<W: Write>(mut writer: W, value: u32) -> Result<(), Error> {
+    let s = format!("{:08x}", value);
+    writer.write_all(s.as_bytes())
+}
+
+fn read_octal_11<R: Read>(mut reader: R) -> Result<u64, Error> {
     let mut buf = [0_u8; 11];
     reader.read_exact(&mut buf[..])?;
     let s = from_utf8(&buf[..]).map_err(|_| Error::other("invalid octal number"))?;
     u64::from_str_radix(s, 8).map_err(|_| Error::other("invalid octal number"))
 }
 
-fn write_11<W: Write>(mut writer: W, value: u64) -> Result<(), Error> {
+fn write_octal_11<W: Write>(mut writer: W, value: u64) -> Result<(), Error> {
     if value > MAX_11 {
-        return Err(Error::other("11-character value is too large"));
+        return Err(Error::other("11-character octal value is too large"));
     }
     let s = format!("{:011o}", value);
     writer.write_all(s.as_bytes())
 }
 
-fn read_path_buf<R: Read>(mut reader: R, len: usize) -> Result<PathBuf, Error> {
+fn read_path_buf<R: Read>(mut reader: R, len: usize, format: Format) -> Result<PathBuf, Error> {
     let mut buf = vec![0_u8; len];
     reader.read_exact(&mut buf[..])?;
     let c_str = CStr::from_bytes_with_nul(&buf).map_err(|_| Error::other("invalid c string"))?;
+    if matches!(format, Format::Newc | Format::NewCrc) {
+        let n = NEWC_HEADER_LEN + len;
+        read_padding(reader, n)?;
+    }
     let os_str = OsStr::from_bytes(c_str.to_bytes());
     Ok(os_str.into())
 }
 
-fn write_path<W: Write, P: AsRef<Path>>(mut writer: W, value: P) -> Result<(), Error> {
+fn write_path<W: Write, P: AsRef<Path>>(
+    mut writer: W,
+    value: P,
+    format: Format,
+) -> Result<(), Error> {
     let value = value.as_ref();
-    writer.write_all(value.as_os_str().as_bytes())?;
+    let bytes = value.as_os_str().as_bytes();
+    writer.write_all(bytes)?;
     writer.write_all(&[0_u8])?;
+    if matches!(format, Format::Newc | Format::NewCrc) {
+        let len = bytes.len() + 1;
+        let n = NEWC_HEADER_LEN + len;
+        write_padding(writer, n)?;
+    }
     Ok(())
 }
 
@@ -371,11 +539,40 @@ fn write_c_str<W: Write>(mut writer: W, value: &CStr) -> Result<(), Error> {
     writer.write_all(value.to_bytes_with_nul())
 }
 
-const MAGIC: [u8; 6] = *b"070707";
+fn read_padding<R: Read>(mut reader: R, len: usize) -> Result<(), Error> {
+    let remainder = len % NEWC_ALIGN;
+    if remainder != 0 {
+        let padding = NEWC_ALIGN - remainder;
+        let mut buf = [0_u8; NEWC_ALIGN];
+        reader.read_exact(&mut buf[..padding])?;
+    }
+    Ok(())
+}
+
+fn write_padding<W: Write>(mut writer: W, len: usize) -> Result<(), Error> {
+    let remainder = len % NEWC_ALIGN;
+    if remainder != 0 {
+        let padding = NEWC_ALIGN - remainder;
+        writer.write_all(&PADDING[..padding])?;
+    }
+    Ok(())
+}
+
+const MAGIC_LEN: usize = 6;
+const ODC_MAGIC: [u8; MAGIC_LEN] = *b"070707";
+const NEWC_MAGIC: [u8; MAGIC_LEN] = *b"070701";
+const NEWCRC_MAGIC: [u8; MAGIC_LEN] = *b"070702";
 const TRAILER: &CStr = c"TRAILER!!!";
-const MAX_6: u32 = 0o777777_u32;
-const MAX_11: u64 = 0o77777777777_u64;
-const ODC_HEADER_LEN: usize = 6 * 9 + 2 * 11;
+// Max. 6-character octal number.
+const MAX_6: u32 = 0o777_777_u32;
+// Max. 11-character octal number.
+const MAX_11: u64 = 0o77_777_777_777_u64;
+// Max. 8-character hexadecimal number.
+const MAX_8: u32 = 0xffff_ffff_u32;
+//const ODC_HEADER_LEN: usize = 6 * 9 + 2 * 11;
+const NEWC_HEADER_LEN: usize = 6 + 13 * 8;
+const NEWC_ALIGN: usize = 4;
+const PADDING: [u8; NEWC_ALIGN] = [0_u8; NEWC_ALIGN];
 
 #[cfg(test)]
 mod tests {
@@ -410,7 +607,8 @@ mod tests {
                     continue;
                 }
                 let metadata = entry.path().metadata().unwrap();
-                let header: OdcHeader = metadata.try_into().unwrap();
+                let mut header: Header = metadata.try_into().unwrap();
+                header.format = Format::Newc;
                 let header = builder
                     .write_entry(
                         header,
@@ -430,7 +628,7 @@ mod tests {
                 let mut entry = entry.unwrap();
                 let mut contents = Vec::new();
                 entry.reader.read_to_end(&mut contents).unwrap();
-                actual_headers.push((entry.name, entry.header));
+                actual_headers.push((entry.name.clone(), entry.header.clone()));
                 actual_files.push(contents);
             }
             assert_eq!(expected_headers, actual_headers);
@@ -442,34 +640,71 @@ mod tests {
     #[test]
     fn odc_header_write_read_symmetry() {
         arbtest(|u| {
-            let expected: OdcHeader = u.arbitrary()?;
+            let expected: Header = u.arbitrary::<OdcHeader>()?.0;
             let mut bytes = Vec::new();
             expected.write(&mut bytes).unwrap();
-            let actual = OdcHeader::read(&bytes[..]).unwrap();
+            let actual = Header::read(&bytes[..]).unwrap();
             assert_eq!(expected, actual);
             Ok(())
         });
     }
 
+    #[derive(Debug, PartialEq, Eq)]
+    struct OdcHeader(Header);
+
     impl<'a> Arbitrary<'a> for OdcHeader {
         fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
-            Ok(Self {
-                dev: u.int_in_range(0..=MAX_6)?,
+            Ok(Self(Header {
+                format: Format::Odc,
+                dev: u.int_in_range(0..=MAX_6 as u64)?,
                 ino: u.int_in_range(0..=MAX_6)?,
                 mode: u.int_in_range(0..=MAX_6)?,
                 uid: u.int_in_range(0..=MAX_6)?,
                 gid: u.int_in_range(0..=MAX_6)?,
                 nlink: u.int_in_range(0..=MAX_6)?,
-                rdev: u.int_in_range(0..=MAX_6)?,
+                rdev: u.int_in_range(0..=MAX_6 as u64)?,
                 mtime: u.int_in_range(0..=MAX_11)?,
                 name_len: u.int_in_range(0..=MAX_6)?,
                 file_size: u.int_in_range(0..=MAX_11)?,
-            })
+            }))
         }
     }
 
-    test_symmetry!(read_6, write_6, 0, MAX_6, u32);
-    test_symmetry!(read_11, write_11, 0, MAX_11, u64);
+    #[test]
+    fn newc_header_write_read_symmetry() {
+        arbtest(|u| {
+            let expected: Header = u.arbitrary::<NewcHeader>()?.0;
+            let mut bytes = Vec::new();
+            expected.write(&mut bytes).unwrap();
+            let actual = Header::read(&bytes[..]).unwrap();
+            assert_eq!(expected, actual);
+            Ok(())
+        });
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct NewcHeader(Header);
+
+    impl<'a> Arbitrary<'a> for NewcHeader {
+        fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
+            Ok(Self(Header {
+                format: Format::Newc,
+                dev: u.int_in_range(0..=MAX_8 as u64)?,
+                ino: u.int_in_range(0..=MAX_8)?,
+                mode: u.int_in_range(0..=MAX_8)?,
+                uid: u.int_in_range(0..=MAX_8)?,
+                gid: u.int_in_range(0..=MAX_8)?,
+                nlink: u.int_in_range(0..=MAX_8)?,
+                rdev: u.int_in_range(0..=MAX_8 as u64)?,
+                mtime: u.int_in_range(0..=MAX_8 as u64)?,
+                name_len: u.int_in_range(0..=MAX_8)?,
+                file_size: u.int_in_range(0..=MAX_8 as u64)?,
+            }))
+        }
+    }
+
+    test_symmetry!(read_octal_6, write_octal_6, 0, MAX_6, u32);
+    test_symmetry!(read_octal_11, write_octal_11, 0, MAX_11, u64);
 
     macro_rules! test_symmetry {
         ($read:ident, $write:ident, $min:expr, $max:expr, $type:ty) => {
