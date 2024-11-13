@@ -11,3 +11,7 @@ walkdir = "2.5.0"
 arbitrary = { version = "1.4.1", features = ["derive", "derive_arbitrary"] }
 arbtest = "0.3.1"
 tempfile = "3.14.0"
+
+[workspace]
+members = [".", "cli"]
+default-members = [".", "cli"]

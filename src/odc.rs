@@ -1,6 +1,7 @@
 use std::ffi::CStr;
 use std::ffi::OsStr;
 use std::fs::File;
+use std::fs::read_link;
 use std::fs::Metadata;
 use std::io::Error;
 use std::io::Read;
@@ -33,6 +34,10 @@ impl<W: Write> CpioBuilder<W> {
             format: Format::Newc,
         }
     }
+    
+    pub fn set_format(&mut self, format: Format) {
+        self.format = format;
+    }
 
     pub fn write_entry<P: AsRef<Path>, R: Read>(
         &mut self,
@@ -40,13 +45,40 @@ impl<W: Write> CpioBuilder<W> {
         name: P,
         mut data: R,
     ) -> Result<Header, Error> {
+        eprintln!("start write entry {}", name.as_ref().display());
         self.fix_header(&mut header, name.as_ref())?;
         header.write(self.writer.by_ref())?;
-        write_path(self.writer.by_ref(), name, self.format)?;
+        write_path(self.writer.by_ref(), name.as_ref(), self.format)?;
         let n = std::io::copy(&mut data, self.writer.by_ref())?;
-        if matches!(self.format, Format::Newc | Format::NewCrc) {
+        eprintln!("write entry {} {} {:?}", name.as_ref().display(), n, header);
+        if matches!(self.format, Format::Newc | Format::Crc) {
             write_padding(self.writer.by_ref(), n as usize)?;
         }
+        eprintln!("end write entry {}", name.as_ref().display());
+        Ok(header)
+    }
+
+    pub fn append_path<P1: AsRef<Path>, P2: AsRef<Path>>(
+        &mut self,
+        path: P1,
+        name: P2,
+    ) -> Result<Header, Error> {
+        let path = path.as_ref();
+        let metadata = path.symlink_metadata()?;
+        let mut header: Header = (&metadata).try_into()?;
+        let header = if metadata.is_dir() {
+            header.file_size = 0;
+            self.write_entry(header, name, std::io::empty())?
+        } else if metadata.is_symlink() {
+            let target = read_link(path)?;
+            header.file_size = target.as_os_str().as_bytes().len() as u64;
+            self.write_entry(header, name, target.as_os_str().as_bytes())?
+                // TODO hard link, special files
+        } else if metadata.is_file() {
+            self.write_entry(header, name, File::open(path)?)?
+        } else {
+            return Err(Error::other("invalid path"));
+        };
         Ok(header)
     }
 
@@ -64,7 +96,7 @@ impl<W: Write> CpioBuilder<W> {
         header.write(self.writer.by_ref())?;
         write_path(self.writer.by_ref(), name, self.format)?;
         let n = write(self.writer.by_ref())?;
-        if matches!(self.format, Format::Newc | Format::NewCrc) {
+        if matches!(self.format, Format::Newc | Format::Crc) {
             write_padding(self.writer.by_ref(), n as usize)?;
         }
         Ok(header)
@@ -85,7 +117,7 @@ impl<W: Write> CpioBuilder<W> {
                 continue;
             }
             let metadata = entry.path().metadata()?;
-            let mut header: Header = metadata.try_into()?;
+            let mut header: Header = (&metadata).try_into()?;
             header.format = builder.format;
             builder.write_entry(header, entry_path, File::open(entry.path())?)?;
         }
@@ -123,7 +155,7 @@ impl<W: Write> CpioBuilder<W> {
         };
         header.write(self.writer.by_ref())?;
         write_c_str(self.writer.by_ref(), TRAILER)?;
-        if matches!(self.format, Format::Newc | Format::NewCrc) {
+        if matches!(self.format, Format::Newc | Format::Crc) {
             write_padding(self.writer.by_ref(), NEWC_HEADER_LEN + len)?;
         }
         Ok(())
@@ -132,7 +164,7 @@ impl<W: Write> CpioBuilder<W> {
     fn fix_header(&mut self, header: &mut Header, name: &Path) -> Result<(), Error> {
         let name_len = name.as_os_str().as_bytes().len();
         let max = match self.format {
-            Format::Newc | Format::NewCrc => MAX_8,
+            Format::Newc | Format::Crc => MAX_8,
             Format::Odc => MAX_6,
         };
         // -1 due to null byte
@@ -142,6 +174,7 @@ impl<W: Write> CpioBuilder<W> {
         // +1 due to null byte
         header.name_len = (name_len + 1) as u32;
         header.ino = self.next_inode();
+        header.format = self.format;
         Ok(())
     }
 
@@ -208,9 +241,10 @@ pub struct Entry<'a, R: Read> {
 impl<'a, R: Read> Entry<'a, R> {
     fn read_to_end(&mut self) -> Result<(), Error> {
         // discard the remaining bytes
-        std::io::copy(&mut self.reader, &mut std::io::sink())?;
+        let n = std::io::copy(&mut self.reader, &mut std::io::sink())?;
+        eprintln!("discarded {}", n);
         // handle padding
-        if matches!(self.header.format, Format::Newc | Format::NewCrc) {
+        if matches!(self.header.format, Format::Newc | Format::Crc) {
             let n = self.header.file_size as usize;
             read_padding(self.reader.get_mut(), n)?;
         }
@@ -266,12 +300,12 @@ impl<'a, R: Read> FusedIterator for Iter<'a, R> {}
 pub enum Format {
     Odc,
     Newc,
-    NewCrc,
+    Crc,
 }
 
 // https://people.freebsd.org/~kientzle/libarchive/man/cpio.5.txt
-#[derive(Clone)]
-#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
+#[derive(Clone, Debug)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct Header {
     pub format: Format,
     pub dev: u64,
@@ -305,25 +339,26 @@ impl Header {
     }
 
     fn do_read<R: Read>(reader: R, magic: [u8; MAGIC_LEN]) -> Result<Self, Error> {
+        eprintln!("magic {:?}", magic);
         let format = if magic == ODC_MAGIC {
             Format::Odc
         } else if magic == NEWC_MAGIC {
             Format::Newc
         } else if magic == NEWCRC_MAGIC {
-            Format::NewCrc
+            Format::Crc
         } else {
             return Err(Error::other("not a cpio file"));
         };
         match format {
             Format::Odc => Self::read_odc(reader),
-            Format::Newc | Format::NewCrc => Self::read_newc(reader),
+            Format::Newc | Format::Crc => Self::read_newc(reader),
         }
     }
 
     fn write<W: Write>(&self, writer: W) -> Result<(), Error> {
         match self.format {
             Format::Odc => self.write_odc(writer),
-            Format::Newc | Format::NewCrc => self.write_newc(writer),
+            Format::Newc | Format::Crc => self.write_newc(writer),
         }
     }
 
@@ -443,13 +478,12 @@ const fn zero_on_overflow(value: u64, max: u64) -> u64 {
     }
 }
 
-impl TryFrom<Metadata> for Header {
+impl TryFrom<&Metadata> for Header {
     type Error = Error;
-    fn try_from(other: Metadata) -> Result<Self, Error> {
+    fn try_from(other: &Metadata) -> Result<Self, Error> {
         use std::os::unix::fs::MetadataExt;
         Ok(Self {
-            // TODO
-            format: Format::Odc,
+            format: Format::Newc,
             dev: other.dev(),
             ino: other.ino() as u32,
             mode: other.mode(),
@@ -510,7 +544,7 @@ fn read_path_buf<R: Read>(mut reader: R, len: usize, format: Format) -> Result<P
     let mut buf = vec![0_u8; len];
     reader.read_exact(&mut buf[..])?;
     let c_str = CStr::from_bytes_with_nul(&buf).map_err(|_| Error::other("invalid c string"))?;
-    if matches!(format, Format::Newc | Format::NewCrc) {
+    if matches!(format, Format::Newc | Format::Crc) {
         let n = NEWC_HEADER_LEN + len;
         read_padding(reader, n)?;
     }
@@ -527,7 +561,7 @@ fn write_path<W: Write, P: AsRef<Path>>(
     let bytes = value.as_os_str().as_bytes();
     writer.write_all(bytes)?;
     writer.write_all(&[0_u8])?;
-    if matches!(format, Format::Newc | Format::NewCrc) {
+    if matches!(format, Format::Newc | Format::Crc) {
         let len = bytes.len() + 1;
         let n = NEWC_HEADER_LEN + len;
         write_padding(writer, n)?;
@@ -543,6 +577,7 @@ fn read_padding<R: Read>(mut reader: R, len: usize) -> Result<(), Error> {
     let remainder = len % NEWC_ALIGN;
     if remainder != 0 {
         let padding = NEWC_ALIGN - remainder;
+        eprintln!("read padding {}", padding);
         let mut buf = [0_u8; NEWC_ALIGN];
         reader.read_exact(&mut buf[..padding])?;
     }
@@ -553,6 +588,7 @@ fn write_padding<W: Write>(mut writer: W, len: usize) -> Result<(), Error> {
     let remainder = len % NEWC_ALIGN;
     if remainder != 0 {
         let padding = NEWC_ALIGN - remainder;
+        eprintln!("write padding {}", padding);
         writer.write_all(&PADDING[..padding])?;
     }
     Ok(())
