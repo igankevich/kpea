@@ -1,7 +1,8 @@
+use std::collections::HashMap;
 use std::ffi::CStr;
 use std::ffi::OsStr;
-use std::fs::File;
 use std::fs::read_link;
+use std::fs::File;
 use std::fs::Metadata;
 use std::io::Error;
 use std::io::Read;
@@ -24,6 +25,8 @@ pub struct CpioBuilder<W: Write> {
     writer: W,
     max_inode: u32,
     format: Format,
+    // Inodes mapping.
+    inodes: HashMap<u64, u32>,
 }
 
 impl<W: Write> CpioBuilder<W> {
@@ -32,9 +35,10 @@ impl<W: Write> CpioBuilder<W> {
             writer,
             max_inode: 0,
             format: Format::Newc,
+            inodes: Default::default(),
         }
     }
-    
+
     pub fn set_format(&mut self, format: Format) {
         self.format = format;
     }
@@ -45,16 +49,15 @@ impl<W: Write> CpioBuilder<W> {
         name: P,
         mut data: R,
     ) -> Result<Header, Error> {
-        eprintln!("start write entry {}", name.as_ref().display());
         self.fix_header(&mut header, name.as_ref())?;
         header.write(self.writer.by_ref())?;
         write_path(self.writer.by_ref(), name.as_ref(), self.format)?;
-        let n = std::io::copy(&mut data, self.writer.by_ref())?;
-        eprintln!("write entry {} {} {:?}", name.as_ref().display(), n, header);
-        if matches!(self.format, Format::Newc | Format::Crc) {
-            write_padding(self.writer.by_ref(), n as usize)?;
+        if header.file_size != 0 {
+            let n = std::io::copy(&mut data, self.writer.by_ref())?;
+            if matches!(self.format, Format::Newc | Format::Crc) {
+                write_padding(self.writer.by_ref(), n as usize)?;
+            }
         }
-        eprintln!("end write entry {}", name.as_ref().display());
         Ok(header)
     }
 
@@ -62,24 +65,22 @@ impl<W: Write> CpioBuilder<W> {
         &mut self,
         path: P1,
         name: P2,
-    ) -> Result<Header, Error> {
+    ) -> Result<(Header, Metadata), Error> {
         let path = path.as_ref();
         let metadata = path.symlink_metadata()?;
         let mut header: Header = (&metadata).try_into()?;
-        let header = if metadata.is_dir() {
-            header.file_size = 0;
-            self.write_entry(header, name, std::io::empty())?
-        } else if metadata.is_symlink() {
+        let header = if metadata.is_symlink() {
             let target = read_link(path)?;
             header.file_size = target.as_os_str().as_bytes().len() as u64;
             self.write_entry(header, name, target.as_os_str().as_bytes())?
-                // TODO hard link, special files
         } else if metadata.is_file() {
             self.write_entry(header, name, File::open(path)?)?
         } else {
-            return Err(Error::other("invalid path"));
+            // directory, block/character device, socket, fifo
+            header.file_size = 0;
+            self.write_entry(header, name, std::io::empty())?
         };
-        Ok(header)
+        Ok((header, metadata))
     }
 
     pub fn write_entry_using_writer<P, F>(
@@ -162,6 +163,23 @@ impl<W: Write> CpioBuilder<W> {
     }
 
     fn fix_header(&mut self, header: &mut Header, name: &Path) -> Result<(), Error> {
+        use std::collections::hash_map::Entry::*;
+        eprintln!("add inode {} {}", header.ino, name.display());
+        let inode = match self.inodes.entry(header.ino) {
+            Vacant(v) => {
+                let inode = self.max_inode;
+                self.max_inode += 1;
+                v.insert(inode);
+                inode
+            }
+            Occupied(o) => {
+                if matches!(self.format, Format::Newc | Format::Crc) {
+                    eprintln!("duplicate inode {} {}", header.ino, name.display());
+                    header.file_size = 0;
+                }
+                *o.get()
+            }
+        };
         let name_len = name.as_os_str().as_bytes().len();
         let max = match self.format {
             Format::Newc | Format::Crc => MAX_8,
@@ -173,25 +191,25 @@ impl<W: Write> CpioBuilder<W> {
         }
         // +1 due to null byte
         header.name_len = (name_len + 1) as u32;
-        header.ino = self.next_inode();
+        header.ino = inode as u64;
         header.format = self.format;
         Ok(())
     }
-
-    fn next_inode(&mut self) -> u32 {
-        let old = self.max_inode;
-        self.max_inode += 1;
-        old
-    }
 }
 
+// TODO optimize inodes for Read + Seek
 pub struct CpioArchive<R: Read> {
     reader: R,
+    // Inode -> file contents mapping for files that have > 1 hard links.
+    contents: HashMap<u64, Vec<u8>>,
 }
 
 impl<R: Read> CpioArchive<R> {
     pub fn new(reader: R) -> Self {
-        Self { reader }
+        Self {
+            reader,
+            contents: Default::default(),
+        }
     }
 
     pub fn iter(&mut self) -> Iter<R> {
@@ -222,12 +240,86 @@ impl<R: Read> CpioArchive<R> {
         if name.as_os_str().as_bytes() == TRAILER.to_bytes() {
             return Ok(None);
         }
-        let n = header.file_size;
+        // TODO file size == 0 vs. file size != 0 ???
+        if header.file_size != 0
+            && header.nlink > 1
+            && matches!(header.format, Format::Newc | Format::Crc)
+        {
+            let mut contents = Vec::new();
+            std::io::copy(
+                &mut self.reader.by_ref().take(header.file_size),
+                &mut contents,
+            )?;
+            eprintln!("cache file contents for inode {}", header.ino);
+            self.contents.insert(header.ino, contents);
+        }
+        // TODO check if this is not a directory
+        let known_contents =
+            if header.nlink > 1 && matches!(header.format, Format::Newc | Format::Crc) {
+                // TODO optimize insert/get
+                let contents = self.contents.get(&header.ino).map(|x| x.as_slice());
+                eprintln!(
+                    "get file contents for inode {}: {}",
+                    header.ino,
+                    contents.is_some()
+                );
+                contents
+            } else {
+                None
+            };
+        let reader = match known_contents {
+            Some(slice) => EntryReader::Slice(slice, self.reader.by_ref()),
+            None => EntryReader::Stream(self.reader.by_ref().take(header.file_size)),
+        };
         Ok(Some(Entry {
             header,
             name,
-            reader: self.reader.by_ref().take(n),
+            reader,
         }))
+    }
+}
+
+pub enum EntryReader<'a, R: Read> {
+    Stream(Take<&'a mut R>),
+    Slice(&'a [u8], &'a mut R),
+}
+
+impl<'a, R: Read> EntryReader<'a, R> {
+    pub fn get_mut(&mut self) -> &mut R {
+        match self {
+            Self::Stream(reader) => reader.get_mut(),
+            Self::Slice(_slice, reader) => reader,
+        }
+    }
+
+    fn discard(&mut self, header: &Header) -> Result<(), Error> {
+        match self {
+            Self::Stream(ref mut reader) => {
+                // discard the remaining bytes
+                let n = std::io::copy(reader, &mut std::io::sink())?;
+                eprintln!("discarded {}", n);
+            }
+            Self::Slice(..) => {
+                // TODO discard?
+            }
+        }
+        let reader = self.get_mut();
+        // handle padding
+        if matches!(header.format, Format::Newc | Format::Crc) {
+            let n = header.file_size as usize;
+            read_padding(reader, n)?;
+        }
+        Ok(())
+    }
+}
+
+// TODO implement all other methods
+impl<'a, R: Read> Read for EntryReader<'a, R> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
+        match self {
+            Self::Stream(ref mut r) => r.read(buf),
+            Self::Slice(ref mut r, ..) => r.read(buf),
+        }
     }
 }
 
@@ -235,26 +327,12 @@ pub struct Entry<'a, R: Read> {
     pub header: Header,
     pub name: PathBuf,
     // TODO can't move out
-    pub reader: Take<&'a mut R>,
-}
-
-impl<'a, R: Read> Entry<'a, R> {
-    fn read_to_end(&mut self) -> Result<(), Error> {
-        // discard the remaining bytes
-        let n = std::io::copy(&mut self.reader, &mut std::io::sink())?;
-        eprintln!("discarded {}", n);
-        // handle padding
-        if matches!(self.header.format, Format::Newc | Format::Crc) {
-            let n = self.header.file_size as usize;
-            read_padding(self.reader.get_mut(), n)?;
-        }
-        Ok(())
-    }
+    pub reader: EntryReader<'a, R>,
 }
 
 impl<'a, R: Read> Drop for Entry<'a, R> {
     fn drop(&mut self) {
-        let _ = self.read_to_end();
+        let _ = self.reader.discard(&self.header);
     }
 }
 
@@ -309,7 +387,7 @@ pub enum Format {
 pub struct Header {
     pub format: Format,
     pub dev: u64,
-    pub ino: u32,
+    pub ino: u64,
     pub mode: u32,
     pub uid: u32,
     pub gid: u32,
@@ -339,7 +417,6 @@ impl Header {
     }
 
     fn do_read<R: Read>(reader: R, magic: [u8; MAGIC_LEN]) -> Result<Self, Error> {
-        eprintln!("magic {:?}", magic);
         let format = if magic == ODC_MAGIC {
             Format::Odc
         } else if magic == NEWC_MAGIC {
@@ -376,7 +453,7 @@ impl Header {
         Ok(Self {
             format: Format::Odc,
             dev: dev as u64,
-            ino,
+            ino: ino as u64,
             mode,
             uid,
             gid,
@@ -396,7 +473,12 @@ impl Header {
                 .try_into()
                 .map_err(|_| Error::other("dev value is too large"))?,
         )?;
-        write_octal_6(writer.by_ref(), self.ino)?;
+        write_octal_6(
+            writer.by_ref(),
+            self.ino
+                .try_into()
+                .map_err(|_| Error::other("inode value is too large"))?,
+        )?;
         write_octal_6(writer.by_ref(), self.mode)?;
         write_octal_6(writer.by_ref(), self.uid)?;
         write_octal_6(writer.by_ref(), self.gid)?;
@@ -430,7 +512,7 @@ impl Header {
         Ok(Self {
             format: Format::Newc,
             dev: makedev(dev_major, dev_minor),
-            ino,
+            ino: ino as u64,
             mode,
             uid,
             gid,
@@ -444,7 +526,12 @@ impl Header {
 
     fn write_newc<W: Write>(&self, mut writer: W) -> Result<(), Error> {
         writer.write_all(&NEWC_MAGIC[..])?;
-        write_hex_8(writer.by_ref(), self.ino)?;
+        write_hex_8(
+            writer.by_ref(),
+            self.ino
+                .try_into()
+                .map_err(|_| Error::other("inode value is too large"))?,
+        )?;
         write_hex_8(writer.by_ref(), self.mode)?;
         write_hex_8(writer.by_ref(), self.uid)?;
         write_hex_8(writer.by_ref(), self.gid)?;
@@ -485,7 +572,7 @@ impl TryFrom<&Metadata> for Header {
         Ok(Self {
             format: Format::Newc,
             dev: other.dev(),
-            ino: other.ino() as u32,
+            ino: other.ino(),
             mode: other.mode(),
             uid: other.uid(),
             gid: other.gid(),
@@ -577,7 +664,6 @@ fn read_padding<R: Read>(mut reader: R, len: usize) -> Result<(), Error> {
     let remainder = len % NEWC_ALIGN;
     if remainder != 0 {
         let padding = NEWC_ALIGN - remainder;
-        eprintln!("read padding {}", padding);
         let mut buf = [0_u8; NEWC_ALIGN];
         reader.read_exact(&mut buf[..padding])?;
     }
@@ -588,7 +674,6 @@ fn write_padding<W: Write>(mut writer: W, len: usize) -> Result<(), Error> {
     let remainder = len % NEWC_ALIGN;
     if remainder != 0 {
         let padding = NEWC_ALIGN - remainder;
-        eprintln!("write padding {}", padding);
         writer.write_all(&PADDING[..padding])?;
     }
     Ok(())
@@ -642,18 +727,19 @@ mod tests {
                 if entry_path == Path::new("") || entry.path().is_dir() {
                     continue;
                 }
-                let metadata = entry.path().metadata().unwrap();
-                let mut header: Header = metadata.try_into().unwrap();
-                header.format = Format::Newc;
-                let header = builder
-                    .write_entry(
-                        header,
-                        entry_path.clone(),
-                        File::open(entry.path()).unwrap(),
-                    )
+                let (header, metadata) = builder
+                    .append_path(entry.path(), entry_path.clone())
                     .unwrap();
                 expected_headers.push((entry_path, header));
-                expected_files.push(std::fs::read(entry.path()).unwrap());
+                let contents = if metadata.is_file() {
+                    std::fs::read(entry.path()).unwrap()
+                } else if metadata.is_symlink() {
+                    let target = read_link(entry.path()).unwrap();
+                    target.as_os_str().as_bytes().to_vec()
+                } else {
+                    Vec::new()
+                };
+                expected_files.push(contents);
             }
             builder.finish().unwrap();
             let reader = File::open(&cpio_path).unwrap();
@@ -693,7 +779,7 @@ mod tests {
             Ok(Self(Header {
                 format: Format::Odc,
                 dev: u.int_in_range(0..=MAX_6 as u64)?,
-                ino: u.int_in_range(0..=MAX_6)?,
+                ino: u.int_in_range(0..=MAX_6)? as u64,
                 mode: u.int_in_range(0..=MAX_6)?,
                 uid: u.int_in_range(0..=MAX_6)?,
                 gid: u.int_in_range(0..=MAX_6)?,
@@ -726,7 +812,7 @@ mod tests {
             Ok(Self(Header {
                 format: Format::Newc,
                 dev: u.int_in_range(0..=MAX_8 as u64)?,
-                ino: u.int_in_range(0..=MAX_8)?,
+                ino: u.int_in_range(0..=MAX_8)? as u64,
                 mode: u.int_in_range(0..=MAX_8)?,
                 uid: u.int_in_range(0..=MAX_8)?,
                 gid: u.int_in_range(0..=MAX_8)?,

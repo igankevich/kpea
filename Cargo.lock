@@ -133,6 +133,7 @@ version = "0.1.0"
 dependencies = [
  "arbitrary",
  "arbtest",
+ "libc",
  "normalize-path",
  "tempfile",
  "walkdir",

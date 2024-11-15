@@ -1,7 +1,6 @@
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Error;
-use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::str::FromStr;
@@ -26,7 +25,7 @@ fn do_main() -> Result<ExitCode, Error> {
 
 fn copy_out(args: Args) -> Result<(), Error> {
     let reader = BufReader::new(std::io::stdin());
-    let mut builder = CpioBuilder::new(std::io::stdout().lock());
+    let mut builder = CpioBuilder::new(std::io::stdout());
     builder.set_format(args.format.into());
     for line in reader.lines() {
         let line = line?;
@@ -35,7 +34,7 @@ fn copy_out(args: Args) -> Result<(), Error> {
             .append_path(&path, &path)
             .map_err(|e| Error::other(format!("failed to process `{}`: {}", path.display(), e)))?;
     }
-    builder.finish()?.flush()?;
+    builder.finish()?;
     Ok(())
 }
 
@@ -103,7 +102,13 @@ struct Args {
     #[arg(short = 't', long = "list")]
     list_contents: bool,
     /// CPIO format.
-    #[arg(value_enum, short = 'H', long = "format", ignore_case = true, default_value = "newc")]
+    #[arg(
+        value_enum,
+        short = 'H',
+        long = "format",
+        ignore_case = true,
+        default_value = "newc"
+    )]
     format: Format,
 }
 
