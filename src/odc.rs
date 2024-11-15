@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::ffi::CStr;
 use std::ffi::OsStr;
+use std::fs::create_dir_all;
 use std::fs::read_link;
 use std::fs::File;
 use std::fs::Metadata;
@@ -69,6 +70,7 @@ impl<W: Write> CpioBuilder<W> {
         let path = path.as_ref();
         let metadata = path.symlink_metadata()?;
         let mut header: Header = (&metadata).try_into()?;
+        eprintln!("append path mode {:#o}", header.mode);
         let header = if metadata.is_symlink() {
             let target = read_link(path)?;
             header.file_size = target.as_os_str().as_bytes().len() as u64;
@@ -226,6 +228,38 @@ impl<R: Read> CpioArchive<R> {
 
     pub fn into_inner(self) -> R {
         self.reader
+    }
+
+    pub fn unpack<P: AsRef<Path>>(mut self, directory: P) -> Result<(), Error> {
+        let directory = directory.as_ref();
+        create_dir_all(directory)?;
+        let directory = directory.normalize();
+        for entry in self.iter() {
+            let entry = entry?;
+            let path = match entry.name.strip_prefix("/") {
+                Ok(path) => path,
+                Err(_) => entry.name.as_path(),
+            };
+            let path = directory.join(path).normalize();
+            if !path.starts_with(&directory) {
+                log::warn!(
+                    "skipping `{}`: outside the output directory",
+                    entry.name.display()
+                );
+                continue;
+            }
+            if let Some(dirname) = path.parent() {
+                create_dir_all(dirname)?;
+            }
+            eprintln!(
+                "file {} mode {:#o} type {:?}",
+                path.display(),
+                entry.header.mode,
+                entry.header.file_type()?
+            );
+            // TODO match file type
+        }
+        Ok(())
     }
 
     fn read_entry(&mut self) -> Result<Option<Entry<R>>, Error> {
@@ -399,6 +433,10 @@ pub struct Header {
 }
 
 impl Header {
+    pub fn file_type(&self) -> Result<FileType, Error> {
+        FileType::try_from_mode(self.mode)
+    }
+
     fn read_some<R: Read>(mut reader: R) -> Result<Option<Self>, Error> {
         let mut magic = [0_u8; MAGIC_LEN];
         let nread = reader.read(&mut magic[..])?;
@@ -556,6 +594,43 @@ impl Header {
         Ok(())
     }
 }
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[repr(u8)]
+pub enum FileType {
+    Socket = 0o14,
+    Symlink = 0o12,
+    Regular = 0o10,
+    BlockDevice = 0o6,
+    Directory = 0o4,
+    CharacterDevice = 0o2,
+    Fifo = 0o1,
+}
+
+impl FileType {
+    pub fn try_from_mode(mode: u32) -> Result<Self, Error> {
+        use FileType::*;
+        const SOCKET: u8 = FileType::Socket as u8;
+        const SYMLINK: u8 = FileType::Symlink as u8;
+        const REGULAR: u8 = FileType::Regular as u8;
+        const BLOCK: u8 = FileType::BlockDevice as u8;
+        const DIRECTORY: u8 = FileType::Directory as u8;
+        const CHAR: u8 = FileType::CharacterDevice as u8;
+        const FIFO: u8 = FileType::Fifo as u8;
+        match ((mode & FILE_TYPE_MASK) >> 12) as u8 {
+            SOCKET => Ok(Socket),
+            SYMLINK => Ok(Symlink),
+            REGULAR => Ok(Regular),
+            BLOCK => Ok(BlockDevice),
+            DIRECTORY => Ok(Directory),
+            CHAR => Ok(CharacterDevice),
+            FIFO => Ok(Fifo),
+            _ => Err(Error::other("unknown file type")),
+        }
+    }
+}
+
+const FILE_TYPE_MASK: u32 = 0o170000;
 
 const fn zero_on_overflow(value: u64, max: u64) -> u64 {
     if value > max {
@@ -755,6 +830,10 @@ mod tests {
             }
             assert_eq!(expected_headers, actual_headers);
             assert_eq!(expected_files, actual_files);
+            drop(archive);
+            let unpack_dir = workdir.path().join("unpacked");
+            let reader = File::open(&cpio_path).unwrap();
+            CpioArchive::new(reader).unpack(&unpack_dir).unwrap();
             Ok(())
         });
     }
@@ -823,6 +902,18 @@ mod tests {
                 file_size: u.int_in_range(0..=MAX_8 as u64)?,
             }))
         }
+    }
+
+    #[test]
+    fn read_write_hex_8_symmetry() {
+        arbtest(|u| {
+            let expected = u.int_in_range(0..=u32::MAX)?;
+            let mut bytes = Vec::new();
+            write_hex_8(&mut bytes, expected).unwrap();
+            let actual = read_hex_8(&bytes[..]).unwrap();
+            assert_eq!(expected, actual);
+            Ok(())
+        });
     }
 
     test_symmetry!(read_octal_6, write_octal_6, 0, MAX_6, u32);

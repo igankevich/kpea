@@ -80,12 +80,10 @@ impl<'a> Arbitrary<'a> for DirectoryOfFiles {
                 CharacterDevice => {
                     // dev null
                     let dev = makedev(1, 3);
-
                     let mode = u.int_in_range(0o400..=0o777)?;
                     mknod(&path, mode, dev)
                 }
                 Symlink => {
-                    //let original: PathBuf = u.arbitrary()?;
                     let original = u.choose(&files[..]).unwrap();
                     symlink(original, &path).unwrap();
                 }
