@@ -20,43 +20,43 @@ use walkdir::WalkDir;
 
 #[test]
 fn our_copy_out_their_copy_in() {
-    let cpio1 = get_test_bin("cpio");
-    let cpio2 = Command::new("cpio");
-    copy_out_copy_in(cpio1, cpio2, false);
+    copy_out_copy_in(|| get_test_bin("cpio"), || Command::new("cpio"), false);
 }
 
 #[test]
 fn their_copy_out_our_copy_in() {
-    let cpio1 = Command::new("cpio");
-    let cpio2 = get_test_bin("cpio");
-    copy_out_copy_in(cpio1, cpio2, true);
+    copy_out_copy_in(|| Command::new("cpio"), || get_test_bin("cpio"), true);
 }
 
 #[test]
 fn our_copy_out_our_copy_in() {
-    let cpio1 = get_test_bin("cpio");
-    let cpio2 = get_test_bin("cpio");
-    copy_out_copy_in(cpio1, cpio2, true);
+    copy_out_copy_in(|| get_test_bin("cpio"), || get_test_bin("cpio"), true);
 }
 
 #[test]
 fn their_copy_out_their_copy_in() {
-    let cpio1 = Command::new("cpio");
-    let cpio2 = Command::new("cpio");
-    copy_out_copy_in(cpio1, cpio2, false);
+    copy_out_copy_in(|| Command::new("cpio"), || Command::new("cpio"), false);
 }
 
-fn copy_out_copy_in(mut cpio1: Command, mut cpio2: Command, allow_hard_link_to_symlink: bool) {
+fn copy_out_copy_in<F1, F2>(mut cpio1: F1, mut cpio2: F2, allow_hard_link_to_symlink: bool)
+where
+    F1: FnMut() -> Command,
+    F2: FnMut() -> Command,
+{
     do_not_truncate_assertions();
     let workdir = TempDir::new().unwrap();
     let files_txt = workdir.path().join("files.txt");
     let files_cpio = workdir.path().join("files.cpio");
     let unpack_dir = workdir.path().join("unpacked");
+    let mut cpio2 = cpio2();
     cpio2.arg("-i");
     cpio2.arg("--preserve-modification-time");
     arbtest(|u| {
         let format = u.choose(&["newc", "odc"]).unwrap();
-        cpio1.args(["--null", format!("--format={}", format).as_str(), "-o"]);
+        let mut cpio1 = cpio1();
+        cpio1.arg("--null");
+        cpio1.arg(format!("--format={}", format));
+        cpio1.arg("-o");
         remove_dir_all(&unpack_dir).ok();
         create_dir_all(&unpack_dir).unwrap();
         let directory: DirectoryOfFiles = u.arbitrary()?;
@@ -100,10 +100,7 @@ fn copy_out_copy_in(mut cpio1: Command, mut cpio2: Command, allow_hard_link_to_s
         //    files2.iter().map(|x| &x.header).collect::<Vec<_>>()
         //);
         Ok(())
-    })
-    .seed(0x7766240900000078);
-    // TODO
-    //.seed(0xac528b8500000060);
+    });
 }
 
 // A directory contains a hard link that points to a symlink.
@@ -114,11 +111,9 @@ fn contains_hard_link_to_symlink<P: AsRef<Path>>(dir: P) -> Result<bool, Error> 
     for entry in WalkDir::new(dir).into_iter() {
         let entry = entry?;
         let metadata = entry.path().symlink_metadata()?;
-        if metadata.is_symlink() {
-            if !inodes.insert(metadata.ino()) {
-                // two symlinks with the same inode found
-                return Ok(true);
-            }
+        if metadata.is_symlink() && !inodes.insert(metadata.ino()) {
+            // two symlinks with the same inode found
+            return Ok(true);
         }
     }
     Ok(false)

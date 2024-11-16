@@ -263,7 +263,7 @@ impl<R: Read> CpioArchive<R> {
     pub fn unpack<P: AsRef<Path>>(mut self, directory: P) -> Result<(), Error> {
         use std::collections::hash_map::Entry::*;
         let directory = directory.as_ref();
-        create_dir_all(&directory)?;
+        create_dir_all(directory)?;
         let directory = directory.normalize();
         let mut dirs = Vec::new();
         // inode -> path

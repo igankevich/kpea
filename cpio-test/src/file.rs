@@ -56,7 +56,7 @@ impl<'a> Arbitrary<'a> for DirectoryOfFiles {
                 // do not allow empty paths
                 continue;
             }
-            let path: OsString = OsString::from_vec(path.into_bytes().into());
+            let path: OsString = OsString::from_vec(path.into_bytes());
             let path: PathBuf = path.into();
             let path = match path.strip_prefix("/") {
                 Ok(path) => path,
