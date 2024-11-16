@@ -1,0 +1,12 @@
+[package]
+name = "cpio-test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+arbitrary = { version = "1.4.1", features = ["derive", "derive_arbitrary"] }
+arbtest = "0.3.1"
+libc = "0.2.162"
+normalize-path = "0.2.1"
+tempfile = "3.14.0"
+walkdir = "2.5.0"

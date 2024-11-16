@@ -19,6 +19,7 @@ use std::iter::FusedIterator;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::symlink;
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixDatagram;
 use std::path::Path;
@@ -94,8 +95,11 @@ impl<W: Write> CpioBuilder<W> {
         );
         let header = if metadata.is_symlink() {
             let target = read_link(path)?;
-            header.file_size = target.as_os_str().as_bytes().len() as u64;
-            self.write_entry(header, name, target.as_os_str().as_bytes())?
+            let mut target = target.into_os_string().into_vec();
+            target.push(0_u8);
+            header.file_size = target.len() as u64;
+            eprintln!("append path symlink {:?} -> {:?}", name.as_ref(), target);
+            self.write_entry(header, name, &target[..])?
         } else if metadata.is_file() {
             self.write_entry(header, name, File::open(path)?)?
         } else {
@@ -187,7 +191,6 @@ impl<W: Write> CpioBuilder<W> {
 
     fn fix_header(&mut self, header: &mut Header, name: &Path) -> Result<(), Error> {
         use std::collections::hash_map::Entry::*;
-        eprintln!("add inode {} {}", header.ino, name.display());
         let inode = match self.inodes.entry(header.ino) {
             Vacant(v) => {
                 let inode = self.max_inode;
@@ -225,6 +228,7 @@ pub struct CpioArchive<R: Read> {
     reader: R,
     // Inode -> file contents mapping for files that have > 1 hard links.
     contents: HashMap<u64, Vec<u8>>,
+    preserve_modification_time: bool,
 }
 
 impl<R: Read> CpioArchive<R> {
@@ -232,7 +236,12 @@ impl<R: Read> CpioArchive<R> {
         Self {
             reader,
             contents: Default::default(),
+            preserve_modification_time: false,
         }
+    }
+
+    pub fn preserve_modification_time(&mut self, value: bool) {
+        self.preserve_modification_time = value;
     }
 
     pub fn iter(&mut self) -> Iter<R> {
@@ -259,6 +268,7 @@ impl<R: Read> CpioArchive<R> {
         let mut dirs = Vec::new();
         // inode -> path
         let mut hard_links = HashMap::new();
+        let preserve_modification_time = self.preserve_modification_time;
         for entry in self.iter() {
             let mut entry = entry?;
             let path = match entry.name.strip_prefix("/") {
@@ -277,37 +287,60 @@ impl<R: Read> CpioArchive<R> {
                 create_dir_all(dirname)?;
             }
             eprintln!(
-                "file {} mode {:#o} type {:?}",
-                path.display(),
+                "unpacking file {:?} mode {:#o} type {:?} size {}",
+                path,
                 entry.header.mode,
-                entry.header.file_type()?
+                entry.header.file_type()?,
+                entry.header.file_size,
             );
             match hard_links.entry(entry.header.ino()) {
                 Vacant(v) => {
-                    v.insert(path.clone());
+                    v.insert((path.clone(), entry.header.file_size));
                 }
                 Occupied(o) => {
-                    let original = o.get();
-                    eprintln!("hard link {} -> {}", original.display(), path.display());
+                    let (original, original_file_size) = o.get();
+                    eprintln!("hard link {:?} -> {:?}", path, original);
                     hard_link(original, &path)?;
+                    if entry.header.file_type()?.is_file()
+                        && *original_file_size < entry.header.file_size
+                    {
+                        let old_mode = path.metadata()?.mode();
+                        if !is_writable(old_mode) {
+                            // make writable
+                            set_permissions(&path, Permissions::from_mode(0o644))?;
+                        }
+                        let mut file = File::options().write(true).truncate(true).open(&path)?;
+                        entry.reader.copy_to(&mut file)?;
+                        if preserve_modification_time {
+                            if let Ok(modified) = entry.header.modified() {
+                                file.set_modified(modified)?;
+                            }
+                        }
+                        drop(file);
+                        set_permissions(&path, Permissions::from_mode(old_mode))?;
+                    }
                     continue;
                 }
             }
-            eprintln!("unpacking {:?}", path);
             match entry.header.file_type()? {
                 FileType::Regular => {
                     let mut file = File::create(&path)?;
-                    entry.reader.copy_to(&mut file)?;
-                    if let Ok(modified) = entry.header.modified() {
-                        file.set_modified(modified)?;
+                    let n = entry.reader.copy_to(&mut file)?;
+                    eprintln!("size {}", n);
+                    if preserve_modification_time {
+                        if let Ok(modified) = entry.header.modified() {
+                            file.set_modified(modified)?;
+                        }
                     }
                     file.set_permissions(Permissions::from_mode(entry.header.file_mode()))?;
                 }
                 FileType::Directory => {
                     // create directory with default permissions
                     create_dir(&path)?;
-                    if let Ok(modified) = entry.header.modified() {
-                        File::open(&path)?.set_modified(modified)?;
+                    if preserve_modification_time {
+                        if let Ok(modified) = entry.header.modified() {
+                            File::open(&path)?.set_modified(modified)?;
+                        }
                     }
                     // apply proper permissions later when we have written all other files
                     dirs.push((path, entry.header.file_mode()));
@@ -316,29 +349,37 @@ impl<R: Read> CpioArchive<R> {
                     eprintln!("mkfifo {:?}", path);
                     let path = path_to_c_string(path)?;
                     mkfifo(&path, entry.header.mode)?;
-                    if let Ok(modified) = entry.header.modified() {
-                        set_file_modified_time(&path, modified)?;
+                    if preserve_modification_time {
+                        if let Ok(modified) = entry.header.modified() {
+                            set_file_modified_time(&path, modified)?;
+                        }
                     }
                 }
                 FileType::Socket => {
                     UnixDatagram::bind(&path)?;
-                    if let Ok(modified) = entry.header.modified() {
-                        let path = path_to_c_string(path)?;
-                        set_file_modified_time(&path, modified)?;
+                    if preserve_modification_time {
+                        if let Ok(modified) = entry.header.modified() {
+                            let path = path_to_c_string(path)?;
+                            set_file_modified_time(&path, modified)?;
+                        }
                     }
                 }
                 FileType::BlockDevice | FileType::CharacterDevice => {
                     let path = path_to_c_string(path)?;
                     mknod(&path, entry.header.mode, entry.header.rdev())?;
-                    if let Ok(modified) = entry.header.modified() {
-                        set_file_modified_time(&path, modified)?;
+                    if preserve_modification_time {
+                        if let Ok(modified) = entry.header.modified() {
+                            set_file_modified_time(&path, modified)?;
+                        }
                     }
                 }
                 FileType::Symlink => {
                     let mut original = Vec::new();
                     entry.reader.read_to_end(&mut original)?;
+                    if let Some(0) = original.last() {
+                        original.pop();
+                    }
                     let original: PathBuf = OsString::from_vec(original).into();
-                    eprintln!("symlink {} -> {}", original.display(), path.display());
                     symlink(original, &path)?;
                 }
             }
@@ -375,7 +416,6 @@ impl<R: Read> CpioArchive<R> {
                 &mut self.reader.by_ref().take(header.file_size),
                 &mut contents,
             )?;
-            eprintln!("cache file contents for inode {}", header.ino);
             self.contents.insert(header.ino, contents);
         }
         // TODO check if this is not a directory
@@ -383,11 +423,6 @@ impl<R: Read> CpioArchive<R> {
             if header.nlink > 1 && matches!(header.format, Format::Newc | Format::Crc) {
                 // TODO optimize insert/get
                 let contents = self.contents.get(&header.ino).map(|x| x.as_slice());
-                eprintln!(
-                    "get file contents for inode {}: {}",
-                    header.ino,
-                    contents.is_some()
-                );
                 contents
             } else {
                 None
@@ -438,8 +473,7 @@ impl<'a, R: Read> EntryReader<'a, R> {
         match self {
             Self::Stream(ref mut reader) => {
                 // discard the remaining bytes
-                let n = std::io::copy(reader, &mut std::io::sink())?;
-                eprintln!("discarded {}", n);
+                std::io::copy(reader, &mut std::io::sink())?;
             }
             Self::Slice(..) => {
                 // TODO discard?
@@ -769,6 +803,10 @@ impl FileType {
             _ => Err(Error::other("unknown file type")),
         }
     }
+
+    pub fn is_file(self) -> bool {
+        self == Self::Regular
+    }
 }
 
 const fn zero_on_overflow(value: u64, max: u64) -> u64 {
@@ -782,7 +820,6 @@ const fn zero_on_overflow(value: u64, max: u64) -> u64 {
 impl TryFrom<&Metadata> for Header {
     type Error = Error;
     fn try_from(other: &Metadata) -> Result<Self, Error> {
-        use std::os::unix::fs::MetadataExt;
         Ok(Self {
             format: Format::Newc,
             dev: other.dev(),
@@ -894,6 +931,10 @@ fn write_padding<W: Write>(mut writer: W, len: usize) -> Result<(), Error> {
     Ok(())
 }
 
+fn is_writable(mode: u32) -> bool {
+    (((mode & FILE_MODE_MASK) >> 8) & FILE_WRITE_BIT) != 0
+}
+
 const MAGIC_LEN: usize = 6;
 const ODC_MAGIC: [u8; MAGIC_LEN] = *b"070707";
 const NEWC_MAGIC: [u8; MAGIC_LEN] = *b"070701";
@@ -911,6 +952,11 @@ const NEWC_ALIGN: usize = 4;
 const PADDING: [u8; NEWC_ALIGN] = [0_u8; NEWC_ALIGN];
 const FILE_TYPE_MASK: u32 = 0o170000;
 const FILE_MODE_MASK: u32 = 0o007777;
+#[allow(unused)]
+const FILE_READ_BIT: u32 = 0o4;
+const FILE_WRITE_BIT: u32 = 0o2;
+#[allow(unused)]
+const FILE_EXEC_BIT: u32 = 0o1;
 
 #[cfg(test)]
 mod tests {
@@ -920,10 +966,10 @@ mod tests {
     use arbitrary::Arbitrary;
     use arbitrary::Unstructured;
     use arbtest::arbtest;
+    use cpio_test::DirectoryOfFiles;
     use tempfile::TempDir;
 
     use super::*;
-    use crate::test::DirectoryOfFiles;
 
     // TODO compare output to GNU cpio
 
@@ -954,7 +1000,9 @@ mod tests {
                     std::fs::read(entry.path()).unwrap()
                 } else if metadata.is_symlink() {
                     let target = read_link(entry.path()).unwrap();
-                    target.as_os_str().as_bytes().to_vec()
+                    let mut target = target.into_os_string().into_vec();
+                    target.push(0_u8);
+                    target
                 } else {
                     Vec::new()
                 };
@@ -978,7 +1026,9 @@ mod tests {
             let unpack_dir = workdir.path().join("unpacked");
             remove_dir_all(&unpack_dir).ok();
             let reader = File::open(&cpio_path).unwrap();
-            CpioArchive::new(reader).unpack(&unpack_dir).unwrap();
+            let mut archive = CpioArchive::new(reader);
+            archive.preserve_modification_time(true);
+            archive.unpack(&unpack_dir).unwrap();
             let files1 = list_dir_all(directory.path()).unwrap();
             let files2 = list_dir_all(&unpack_dir).unwrap();
             assert_eq!(

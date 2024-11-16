@@ -12,8 +12,9 @@ walkdir = "2.5.0"
 [dev-dependencies]
 arbitrary = { version = "1.4.1", features = ["derive", "derive_arbitrary"] }
 arbtest = "0.3.1"
+cpio-test = { path = "cpio-test" }
 tempfile = "3.14.0"
 
 [workspace]
-members = [".", "cli"]
+members = [".", "cli", "cpio-test"]
 default-members = [".", "cli"]

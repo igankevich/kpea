@@ -10,3 +10,11 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "4.5.20", features = ["derive"] }
 cpio = { path = ".." }
+similar-asserts = "1.6.0"
+
+[dev-dependencies]
+arbtest = "0.3.1"
+cpio-test = { path = "../cpio-test" }
+tempfile = "3.14.0"
+test_bin = "0.4.0"
+walkdir = "2.5.0"

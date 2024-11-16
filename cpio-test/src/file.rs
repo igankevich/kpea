@@ -1,12 +1,17 @@
+use std::collections::HashMap;
 use std::ffi::CString;
 use std::ffi::OsString;
 use std::fs::create_dir_all;
 use std::fs::hard_link;
+use std::fs::Metadata;
+use std::fs::read_link;
 use std::fs::DirBuilder;
 use std::fs::File;
 use std::fs::Permissions;
+use std::io::Error;
 use std::io::Write;
 use std::os::unix::ffi::OsStringExt;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::symlink;
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::fs::PermissionsExt;
@@ -20,6 +25,7 @@ use arbitrary::Arbitrary;
 use arbitrary::Unstructured;
 use normalize_path::NormalizePath;
 use tempfile::TempDir;
+use walkdir::WalkDir;
 
 use crate::makedev;
 use crate::mkfifo;
@@ -66,7 +72,6 @@ impl<'a> Arbitrary<'a> for DirectoryOfFiles {
             if matches!(kind, FileKind::HardLink | FileKind::Symlink) && files.is_empty() {
                 kind = Regular;
             }
-            eprintln!("{:?}", kind);
             let t = {
                 let t = SystemTime::now() + Duration::from_secs(60 * 60 * 24);
                 let dt = t.duration_since(SystemTime::UNIX_EPOCH).unwrap();
@@ -76,6 +81,7 @@ impl<'a> Arbitrary<'a> for DirectoryOfFiles {
                         u.int_in_range(0..=999_999_999)?,
                     )
             };
+            eprintln!("generate {:?}: {:?}", kind, path);
             match kind {
                 Regular => {
                     let mode = u.int_in_range(0o400..=0o777)?;
@@ -124,10 +130,12 @@ impl<'a> Arbitrary<'a> for DirectoryOfFiles {
                 }
                 Symlink => {
                     let original = u.choose(&files[..]).unwrap();
+                    eprintln!("symlink {:?} -> {:?}", path, original);
                     symlink(original, &path).unwrap();
                 }
                 HardLink => {
                     let original = u.choose(&files[..]).unwrap();
+                    eprintln!("hard link {:?} -> {:?}", path, original);
                     assert!(
                         hard_link(original, &path).is_ok(),
                         "original = `{}`, path = `{}`",
@@ -154,4 +162,85 @@ enum FileKind {
     CharacterDevice,
     Symlink,
     HardLink,
+}
+
+pub fn list_dir_all<P: AsRef<Path>>(dir: P) -> Result<Vec<FileInfo>, Error> {
+    let dir = dir.as_ref();
+    let mut files = Vec::new();
+    for entry in WalkDir::new(dir).into_iter() {
+        let entry = entry?;
+        let metadata = entry.path().symlink_metadata()?;
+        let contents = if metadata.is_file() {
+            std::fs::read(entry.path()).unwrap()
+        } else if metadata.is_symlink() {
+            let target = read_link(entry.path()).unwrap();
+            target.as_os_str().as_bytes().to_vec()
+        } else {
+            Vec::new()
+        };
+        let path = entry.path().strip_prefix(dir).map_err(Error::other)?;
+        let header: Header = (&metadata).try_into()?;
+        files.push(FileInfo {
+            path: path.to_path_buf(),
+            header,
+            contents,
+        });
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    // remap inodes
+    use std::collections::hash_map::Entry::*;
+    let mut inodes = HashMap::new();
+    let mut next_inode = 0;
+    for file in files.iter_mut() {
+        let old = file.header.ino;
+        let inode = match inodes.entry(old) {
+            Vacant(v) => {
+                let inode = next_inode;
+                v.insert(next_inode);
+                next_inode += 1;
+                inode
+            }
+            Occupied(o) => *o.get(),
+        };
+        file.header.ino = inode;
+    }
+    Ok(files)
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub struct FileInfo {
+    pub path: PathBuf,
+    pub header: Header,
+    pub contents: Vec<u8>,
+}
+
+#[derive(PartialEq, Eq, Clone, Debug)]
+pub struct Header {
+    pub dev: u64,
+    pub ino: u64,
+    pub mode: u32,
+    pub uid: u32,
+    pub gid: u32,
+    pub nlink: u32,
+    pub rdev: u64,
+    pub mtime: u64,
+    pub file_size: u64,
+}
+
+impl TryFrom<&Metadata> for Header {
+    type Error = Error;
+    fn try_from(other: &Metadata) -> Result<Self, Error> {
+        use std::os::unix::fs::MetadataExt;
+        Ok(Self {
+            dev: other.dev(),
+            ino: other.ino(),
+            mode: other.mode(),
+            uid: other.uid(),
+            gid: other.gid(),
+            nlink: other.nlink() as u32,
+            rdev: other.rdev(),
+            mtime: other.mtime() as u64,
+            file_size: other.size(),
+        })
+    }
 }
