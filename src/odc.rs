@@ -1,19 +1,31 @@
 use std::collections::HashMap;
 use std::ffi::CStr;
 use std::ffi::OsStr;
+use std::ffi::OsString;
+use std::fs::create_dir;
 use std::fs::create_dir_all;
+use std::fs::hard_link;
 use std::fs::read_link;
+use std::fs::set_permissions;
 use std::fs::File;
 use std::fs::Metadata;
+use std::fs::Permissions;
 use std::io::Error;
+use std::io::ErrorKind;
 use std::io::Read;
 use std::io::Take;
 use std::io::Write;
 use std::iter::FusedIterator;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::OsStringExt;
+use std::os::unix::fs::symlink;
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixDatagram;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::from_utf8;
+use std::time::Duration;
+use std::time::SystemTime;
 
 use normalize_path::NormalizePath;
 use walkdir::WalkDir;
@@ -21,6 +33,10 @@ use walkdir::WalkDir;
 use crate::major;
 use crate::makedev;
 use crate::minor;
+use crate::mkfifo;
+use crate::mknod;
+use crate::path_to_c_string;
+use crate::set_file_modified_time;
 
 pub struct CpioBuilder<W: Write> {
     writer: W,
@@ -70,7 +86,12 @@ impl<W: Write> CpioBuilder<W> {
         let path = path.as_ref();
         let metadata = path.symlink_metadata()?;
         let mut header: Header = (&metadata).try_into()?;
-        eprintln!("append path mode {:#o}", header.mode);
+        eprintln!(
+            "append path {:?} mode {:#o} type {:?}",
+            path.display(),
+            header.mode,
+            header.file_type()
+        );
         let header = if metadata.is_symlink() {
             let target = read_link(path)?;
             header.file_size = target.as_os_str().as_bytes().len() as u64;
@@ -231,18 +252,22 @@ impl<R: Read> CpioArchive<R> {
     }
 
     pub fn unpack<P: AsRef<Path>>(mut self, directory: P) -> Result<(), Error> {
+        use std::collections::hash_map::Entry::*;
         let directory = directory.as_ref();
-        create_dir_all(directory)?;
+        create_dir_all(&directory)?;
         let directory = directory.normalize();
+        let mut dirs = Vec::new();
+        // inode -> path
+        let mut hard_links = HashMap::new();
         for entry in self.iter() {
-            let entry = entry?;
+            let mut entry = entry?;
             let path = match entry.name.strip_prefix("/") {
                 Ok(path) => path,
                 Err(_) => entry.name.as_path(),
             };
             let path = directory.join(path).normalize();
             if !path.starts_with(&directory) {
-                log::warn!(
+                eprintln!(
                     "skipping `{}`: outside the output directory",
                     entry.name.display()
                 );
@@ -257,7 +282,73 @@ impl<R: Read> CpioArchive<R> {
                 entry.header.mode,
                 entry.header.file_type()?
             );
-            // TODO match file type
+            match hard_links.entry(entry.header.ino()) {
+                Vacant(v) => {
+                    v.insert(path.clone());
+                }
+                Occupied(o) => {
+                    let original = o.get();
+                    eprintln!("hard link {} -> {}", original.display(), path.display());
+                    hard_link(original, &path)?;
+                    continue;
+                }
+            }
+            eprintln!("unpacking {:?}", path);
+            match entry.header.file_type()? {
+                FileType::Regular => {
+                    let mut file = File::create(&path)?;
+                    entry.reader.copy_to(&mut file)?;
+                    if let Ok(modified) = entry.header.modified() {
+                        file.set_modified(modified)?;
+                    }
+                    file.set_permissions(Permissions::from_mode(entry.header.file_mode()))?;
+                }
+                FileType::Directory => {
+                    // create directory with default permissions
+                    create_dir(&path)?;
+                    if let Ok(modified) = entry.header.modified() {
+                        File::open(&path)?.set_modified(modified)?;
+                    }
+                    // apply proper permissions later when we have written all other files
+                    dirs.push((path, entry.header.file_mode()));
+                }
+                FileType::Fifo => {
+                    eprintln!("mkfifo {:?}", path);
+                    let path = path_to_c_string(path)?;
+                    mkfifo(&path, entry.header.mode)?;
+                    if let Ok(modified) = entry.header.modified() {
+                        set_file_modified_time(&path, modified)?;
+                    }
+                }
+                FileType::Socket => {
+                    UnixDatagram::bind(&path)?;
+                    if let Ok(modified) = entry.header.modified() {
+                        let path = path_to_c_string(path)?;
+                        set_file_modified_time(&path, modified)?;
+                    }
+                }
+                FileType::BlockDevice | FileType::CharacterDevice => {
+                    let path = path_to_c_string(path)?;
+                    mknod(&path, entry.header.mode, entry.header.rdev())?;
+                    if let Ok(modified) = entry.header.modified() {
+                        set_file_modified_time(&path, modified)?;
+                    }
+                }
+                FileType::Symlink => {
+                    let mut original = Vec::new();
+                    entry.reader.read_to_end(&mut original)?;
+                    let original: PathBuf = OsString::from_vec(original).into();
+                    eprintln!("symlink {} -> {}", original.display(), path.display());
+                    symlink(original, &path)?;
+                }
+            }
+            eprintln!("unpacked");
+        }
+        // TODO heap?
+        dirs.sort_by(|a, b| b.0.cmp(&a.0));
+        for (path, mode) in dirs.into_iter() {
+            let perms = Permissions::from_mode(mode);
+            set_permissions(&path, perms)?;
         }
         Ok(())
     }
@@ -323,6 +414,23 @@ impl<'a, R: Read> EntryReader<'a, R> {
         match self {
             Self::Stream(reader) => reader.get_mut(),
             Self::Slice(_slice, reader) => reader,
+        }
+    }
+
+    pub fn copy_to<W: Write>(&mut self, sink: &mut W) -> Result<u64, Error> {
+        match self {
+            Self::Stream(ref mut reader) => std::io::copy(reader, sink),
+            Self::Slice(slice, _reader) => {
+                sink.write_all(slice)?;
+                Ok(slice.len() as u64)
+            }
+        }
+    }
+
+    pub fn is_hard_link(&self) -> bool {
+        match self {
+            Self::Stream(..) => false,
+            Self::Slice(..) => true,
         }
     }
 
@@ -433,8 +541,41 @@ pub struct Header {
 }
 
 impl Header {
+    /// Get file type bits from the mode.
     pub fn file_type(&self) -> Result<FileType, Error> {
         FileType::try_from_mode(self.mode)
+    }
+
+    /// Get file mode without file type bits.
+    pub fn file_mode(&self) -> u32 {
+        self.mode & FILE_MODE_MASK
+    }
+
+    /// Get file mode with file type bits.
+    pub fn mode(&self) -> u32 {
+        self.mode
+    }
+
+    /// Get the id of the device that contains the file.
+    pub fn dev(&self) -> u64 {
+        self.dev
+    }
+
+    /// Get device id of the file itself (if it is a device file).
+    pub fn rdev(&self) -> u64 {
+        self.rdev
+    }
+
+    /// Get inode.
+    pub fn ino(&self) -> u64 {
+        self.ino
+    }
+
+    pub fn modified(&self) -> Result<SystemTime, Error> {
+        let dt = Duration::from_secs(self.mtime);
+        SystemTime::UNIX_EPOCH
+            .checked_add(dt)
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "out of range timestamp"))
     }
 
     fn read_some<R: Read>(mut reader: R) -> Result<Option<Self>, Error> {
@@ -630,8 +771,6 @@ impl FileType {
     }
 }
 
-const FILE_TYPE_MASK: u32 = 0o170000;
-
 const fn zero_on_overflow(value: u64, max: u64) -> u64 {
     if value > max {
         0
@@ -702,6 +841,7 @@ fn write_octal_11<W: Write>(mut writer: W, value: u64) -> Result<(), Error> {
     writer.write_all(s.as_bytes())
 }
 
+// TODO this should be CString to optimize file system related operations
 fn read_path_buf<R: Read>(mut reader: R, len: usize, format: Format) -> Result<PathBuf, Error> {
     let mut buf = vec![0_u8; len];
     reader.read_exact(&mut buf[..])?;
@@ -769,9 +909,13 @@ const MAX_8: u32 = 0xffff_ffff_u32;
 const NEWC_HEADER_LEN: usize = 6 + 13 * 8;
 const NEWC_ALIGN: usize = 4;
 const PADDING: [u8; NEWC_ALIGN] = [0_u8; NEWC_ALIGN];
+const FILE_TYPE_MASK: u32 = 0o170000;
+const FILE_MODE_MASK: u32 = 0o007777;
 
 #[cfg(test)]
 mod tests {
+
+    use std::fs::remove_dir_all;
 
     use arbitrary::Arbitrary;
     use arbitrary::Unstructured;
@@ -799,7 +943,7 @@ mod tests {
                     .strip_prefix(directory.path())
                     .unwrap()
                     .normalize();
-                if entry_path == Path::new("") || entry.path().is_dir() {
+                if entry_path == Path::new("") {
                     continue;
                 }
                 let (header, metadata) = builder
@@ -832,10 +976,72 @@ mod tests {
             assert_eq!(expected_files, actual_files);
             drop(archive);
             let unpack_dir = workdir.path().join("unpacked");
+            remove_dir_all(&unpack_dir).ok();
             let reader = File::open(&cpio_path).unwrap();
             CpioArchive::new(reader).unpack(&unpack_dir).unwrap();
+            let files1 = list_dir_all(directory.path()).unwrap();
+            let files2 = list_dir_all(&unpack_dir).unwrap();
+            assert_eq!(
+                files1.iter().map(|x| &x.path).collect::<Vec<_>>(),
+                files2.iter().map(|x| &x.path).collect::<Vec<_>>()
+            );
+            assert_eq!(
+                files1.iter().map(|x| &x.header).collect::<Vec<_>>(),
+                files2.iter().map(|x| &x.header).collect::<Vec<_>>()
+            );
+            assert_eq!(files1, files2);
             Ok(())
         });
+    }
+
+    fn list_dir_all<P: AsRef<Path>>(dir: P) -> Result<Vec<FileInfo>, Error> {
+        let dir = dir.as_ref();
+        let mut files = Vec::new();
+        for entry in WalkDir::new(dir).into_iter() {
+            let entry = entry?;
+            let metadata = entry.path().symlink_metadata()?;
+            let contents = if metadata.is_file() {
+                std::fs::read(entry.path()).unwrap()
+            } else if metadata.is_symlink() {
+                let target = read_link(entry.path()).unwrap();
+                target.as_os_str().as_bytes().to_vec()
+            } else {
+                Vec::new()
+            };
+            let path = entry.path().strip_prefix(dir).map_err(Error::other)?;
+            let header: Header = (&metadata).try_into()?;
+            files.push(FileInfo {
+                path: path.to_path_buf(),
+                header,
+                contents,
+            });
+        }
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        // remap inodes
+        use std::collections::hash_map::Entry::*;
+        let mut inodes = HashMap::new();
+        let mut next_inode = 0;
+        for file in files.iter_mut() {
+            let old = file.header.ino;
+            let inode = match inodes.entry(old) {
+                Vacant(v) => {
+                    let inode = next_inode;
+                    v.insert(next_inode);
+                    next_inode += 1;
+                    inode
+                }
+                Occupied(o) => *o.get(),
+            };
+            file.header.ino = inode;
+        }
+        Ok(files)
+    }
+
+    #[derive(PartialEq, Eq, Debug, Clone)]
+    struct FileInfo {
+        path: PathBuf,
+        header: Header,
+        contents: Vec<u8>,
     }
 
     #[test]
