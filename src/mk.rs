@@ -1,5 +1,5 @@
-use std::ffi::CString;
 use std::ffi::CStr;
+use std::ffi::CString;
 use std::io::Error;
 use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
@@ -39,14 +39,8 @@ pub fn set_file_modified_time(path: &CStr, t: SystemTime) -> Result<(), Error> {
             tv_nsec: d.subsec_nanos() as libc::c_long,
         },
     ];
-    let ret = unsafe {
-        libc::utimensat(
-            AT_FDCWD,
-            path.as_ptr(),
-            times.as_ptr(),
-            AT_SYMLINK_NOFOLLOW,
-        )
-    };
+    let ret =
+        unsafe { libc::utimensat(AT_FDCWD, path.as_ptr(), times.as_ptr(), AT_SYMLINK_NOFOLLOW) };
     if ret < 0 {
         return Err(Error::last_os_error());
     }
