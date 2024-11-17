@@ -87,26 +87,6 @@ impl<W: Write> CpioBuilder<W> {
         Ok((header, metadata))
     }
 
-    pub fn write_entry_using_writer<P, F>(
-        &mut self,
-        mut header: Header,
-        name: P,
-        mut write: F,
-    ) -> Result<Header, Error>
-    where
-        P: AsRef<Path>,
-        F: FnMut(&mut W) -> Result<u64, Error>,
-    {
-        self.fix_header(&mut header, name.as_ref())?;
-        header.write(self.writer.by_ref())?;
-        write_path(self.writer.by_ref(), name, self.format)?;
-        let n = write(self.writer.by_ref())?;
-        if matches!(self.format, Format::Newc | Format::Crc) {
-            write_padding(self.writer.by_ref(), n as usize)?;
-        }
-        Ok(header)
-    }
-
     pub fn pack<P: AsRef<Path>>(writer: W, directory: P) -> Result<W, Error> {
         let directory = directory.as_ref();
         let mut builder = Self::new(writer);

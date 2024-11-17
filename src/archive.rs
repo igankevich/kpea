@@ -7,6 +7,7 @@ use std::fs::set_permissions;
 use std::fs::File;
 use std::fs::Permissions;
 use std::io::Error;
+use std::io::IoSliceMut;
 use std::io::Read;
 use std::io::Take;
 use std::io::Write;
@@ -194,8 +195,7 @@ impl<R: Read> CpioArchive<R> {
             }
             eprintln!("unpacked");
         }
-        // TODO heap?
-        dirs.sort_by(|a, b| b.0.cmp(&a.0));
+        dirs.sort_unstable_by(|a, b| b.0.cmp(&a.0));
         for (path, mode) in dirs.into_iter() {
             let perms = Permissions::from_mode(mode);
             set_permissions(&path, perms)?;
@@ -298,7 +298,6 @@ impl<'a, R: Read> EntryReader<'a, R> {
     }
 }
 
-// TODO implement all other methods
 impl<'a, R: Read> Read for EntryReader<'a, R> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
         match self {
@@ -306,12 +305,39 @@ impl<'a, R: Read> Read for EntryReader<'a, R> {
             Self::Slice(ref mut r, ..) => r.read(buf),
         }
     }
+
+    fn read_vectored(&mut self, bufs: &mut [IoSliceMut<'_>]) -> Result<usize, Error> {
+        match self {
+            Self::Stream(ref mut r) => r.read_vectored(bufs),
+            Self::Slice(ref mut r, ..) => r.read_vectored(bufs),
+        }
+    }
+
+    fn read_to_end(&mut self, buf: &mut Vec<u8>) -> Result<usize, Error> {
+        match self {
+            Self::Stream(ref mut r) => r.read_to_end(buf),
+            Self::Slice(ref mut r, ..) => r.read_to_end(buf),
+        }
+    }
+
+    fn read_to_string(&mut self, buf: &mut String) -> Result<usize, Error> {
+        match self {
+            Self::Stream(ref mut r) => r.read_to_string(buf),
+            Self::Slice(ref mut r, ..) => r.read_to_string(buf),
+        }
+    }
+
+    fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), Error> {
+        match self {
+            Self::Stream(ref mut r) => r.read_exact(buf),
+            Self::Slice(ref mut r, ..) => r.read_exact(buf),
+        }
+    }
 }
 
 pub struct Entry<'a, R: Read> {
     pub header: Header,
     pub name: PathBuf,
-    // TODO can't move out
     pub reader: EntryReader<'a, R>,
 }
 
