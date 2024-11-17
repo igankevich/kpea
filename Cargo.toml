@@ -3,7 +3,14 @@ name = "kpea"
 version.workspace = true
 edition = "2021"
 license.workspace = true
+homepage = "https://github.com/igankevich/kpea"
+repository = "https://github.com/igankevich/kpea"
+documentation = "https://docs.rs/kpea"
+readme = "README.md"
 description = "CPIO archive reader/writer library. Supports New ASCII and Old character formats. Fuzz-tested against GNU cpio."
+keywords = ["cpio", "archive"]
+categories = ["encoding", "filesystem"]
+include = ["**/*.rs", "Cargo.toml", "README.md", "LICENSE"]
 
 [dependencies]
 libc = "0.2.162"
