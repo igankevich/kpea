@@ -63,18 +63,11 @@ impl<W: Write> CpioBuilder<W> {
         let path = path.as_ref();
         let fs_metadata = path.symlink_metadata()?;
         let mut cpio_metadata: Metadata = (&fs_metadata).try_into()?;
-        eprintln!(
-            "append path {:?} mode {:#o} type {:?}",
-            path.display(),
-            cpio_metadata.mode,
-            cpio_metadata.file_type()
-        );
         let cpio_metadata = if fs_metadata.is_symlink() {
             let target = read_link(path)?;
             let mut target = target.into_os_string().into_vec();
             target.push(0_u8);
             cpio_metadata.file_size = target.len() as u64;
-            eprintln!("append path symlink {:?} -> {:?}", name.as_ref(), target);
             self.write_entry(cpio_metadata, name, &target[..])?
         } else if fs_metadata.is_file() {
             self.write_entry(cpio_metadata, name, File::open(path)?)?
@@ -147,7 +140,6 @@ impl<W: Write> CpioBuilder<W> {
             }
             Occupied(o) => {
                 if matches!(self.format, Format::Newc | Format::Crc) {
-                    eprintln!("duplicate inode {} {}", metadata.ino, name.display());
                     metadata.file_size = 0;
                 }
                 *o.get()

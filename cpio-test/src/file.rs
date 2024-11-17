@@ -80,7 +80,6 @@ impl<'a> Arbitrary<'a> for DirectoryOfFiles {
                         u.int_in_range(0..=999_999_999)?,
                     )
             };
-            eprintln!("generate {:?}: {:?}", kind, path);
             match kind {
                 Regular => {
                     let mode = u.int_in_range(0o400..=0o777)?;
@@ -129,12 +128,10 @@ impl<'a> Arbitrary<'a> for DirectoryOfFiles {
                 }
                 Symlink => {
                     let original = u.choose(&files[..]).unwrap();
-                    eprintln!("symlink {:?} -> {:?}", path, original);
                     symlink(original, &path).unwrap();
                 }
                 HardLink => {
                     let original = u.choose(&files[..]).unwrap();
-                    eprintln!("hard link {:?} -> {:?}", path, original);
                     assert!(
                         hard_link(original, &path).is_ok(),
                         "original = `{}`, path = `{}`",

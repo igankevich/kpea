@@ -95,22 +95,11 @@ impl<R: Read> CpioArchive<R> {
             };
             let path = directory.join(path).normalize();
             if !path.starts_with(&directory) {
-                eprintln!(
-                    "skipping `{}`: outside the output directory",
-                    entry.name.display()
-                );
                 continue;
             }
             if let Some(dirname) = path.parent() {
                 create_dir_all(dirname)?;
             }
-            eprintln!(
-                "unpacking file {:?} mode {:#o} type {:?} size {}",
-                path,
-                entry.metadata.mode,
-                entry.metadata.file_type()?,
-                entry.metadata.file_size,
-            );
             match hard_links.entry(entry.metadata.ino()) {
                 Vacant(v) => {
                     v.insert((path.clone(), entry.metadata.file_size));
@@ -265,38 +254,44 @@ impl<R: Read> CpioArchive<R> {
             }
             let contents = self.contents.get(&metadata.ino).map(|x| x.as_slice());
             match contents {
-                Some(slice) => EntryReader::Slice(slice, self.reader.by_ref()),
-                None => EntryReader::Stream(self.reader.by_ref().take(metadata.file_size)),
+                Some(slice) => InnerEntryReader::Slice(slice, self.reader.by_ref()),
+                None => InnerEntryReader::Stream(self.reader.by_ref().take(metadata.file_size)),
             }
         } else {
-            EntryReader::Stream(self.reader.by_ref().take(metadata.file_size))
+            InnerEntryReader::Stream(self.reader.by_ref().take(metadata.file_size))
         };
         Ok(Some(Entry {
             metadata,
             name,
-            reader,
+            reader: EntryReader { inner: reader },
             format,
         }))
     }
 }
 
-pub enum EntryReader<'a, R: Read> {
+pub struct EntryReader<'a, R: Read> {
+    inner: InnerEntryReader<'a, R>,
+}
+
+enum InnerEntryReader<'a, R: Read> {
     Stream(Take<&'a mut R>),
     Slice(&'a [u8], &'a mut R),
 }
 
 impl<'a, R: Read> EntryReader<'a, R> {
     pub fn get_mut(&mut self) -> &mut R {
-        match self {
-            Self::Stream(reader) => reader.get_mut(),
-            Self::Slice(_slice, reader) => reader,
+        use InnerEntryReader::*;
+        match self.inner {
+            Stream(ref mut reader) => reader.get_mut(),
+            Slice(_slice, ref mut reader) => reader,
         }
     }
 
     pub fn copy_to<W: Write>(&mut self, sink: &mut W) -> Result<u64, Error> {
-        match self {
-            Self::Stream(ref mut reader) => std::io::copy(reader, sink),
-            Self::Slice(slice, _reader) => {
+        use InnerEntryReader::*;
+        match self.inner {
+            Stream(ref mut reader) => std::io::copy(reader, sink),
+            Slice(slice, ref mut _reader) => {
                 sink.write_all(slice)?;
                 Ok(slice.len() as u64)
             }
@@ -304,19 +299,21 @@ impl<'a, R: Read> EntryReader<'a, R> {
     }
 
     pub fn is_hard_link(&self) -> bool {
-        match self {
-            Self::Stream(..) => false,
-            Self::Slice(..) => true,
+        use InnerEntryReader::*;
+        match self.inner {
+            Stream(..) => false,
+            Slice(..) => true,
         }
     }
 
     fn discard(&mut self, metadata: &Metadata, format: Format) -> Result<(), Error> {
-        match self {
-            Self::Stream(ref mut reader) => {
+        use InnerEntryReader::*;
+        match self.inner {
+            Stream(ref mut reader) => {
                 // discard the remaining bytes
                 std::io::copy(reader, &mut std::io::sink())?;
             }
-            Self::Slice(ref mut x, ..) => {
+            Slice(ref mut x, ..) => {
                 *x = &[];
             }
         }
@@ -332,37 +329,42 @@ impl<'a, R: Read> EntryReader<'a, R> {
 
 impl<'a, R: Read> Read for EntryReader<'a, R> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
-        match self {
-            Self::Stream(ref mut r) => r.read(buf),
-            Self::Slice(ref mut r, ..) => r.read(buf),
+        use InnerEntryReader::*;
+        match self.inner {
+            Stream(ref mut r) => r.read(buf),
+            Slice(ref mut r, ..) => r.read(buf),
         }
     }
 
     fn read_vectored(&mut self, bufs: &mut [IoSliceMut<'_>]) -> Result<usize, Error> {
-        match self {
-            Self::Stream(ref mut r) => r.read_vectored(bufs),
-            Self::Slice(ref mut r, ..) => r.read_vectored(bufs),
+        use InnerEntryReader::*;
+        match self.inner {
+            Stream(ref mut r) => r.read_vectored(bufs),
+            Slice(ref mut r, ..) => r.read_vectored(bufs),
         }
     }
 
     fn read_to_end(&mut self, buf: &mut Vec<u8>) -> Result<usize, Error> {
-        match self {
-            Self::Stream(ref mut r) => r.read_to_end(buf),
-            Self::Slice(ref mut r, ..) => r.read_to_end(buf),
+        use InnerEntryReader::*;
+        match self.inner {
+            Stream(ref mut r) => r.read_to_end(buf),
+            Slice(ref mut r, ..) => r.read_to_end(buf),
         }
     }
 
     fn read_to_string(&mut self, buf: &mut String) -> Result<usize, Error> {
-        match self {
-            Self::Stream(ref mut r) => r.read_to_string(buf),
-            Self::Slice(ref mut r, ..) => r.read_to_string(buf),
+        use InnerEntryReader::*;
+        match self.inner {
+            Stream(ref mut r) => r.read_to_string(buf),
+            Slice(ref mut r, ..) => r.read_to_string(buf),
         }
     }
 
     fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), Error> {
-        match self {
-            Self::Stream(ref mut r) => r.read_exact(buf),
-            Self::Slice(ref mut r, ..) => r.read_exact(buf),
+        use InnerEntryReader::*;
+        match self.inner {
+            Stream(ref mut r) => r.read_exact(buf),
+            Slice(ref mut r, ..) => r.read_exact(buf),
         }
     }
 }

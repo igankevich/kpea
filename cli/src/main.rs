@@ -137,6 +137,9 @@ struct Args {
     /// Preserve file modification time.
     #[arg(short = 'm', long = "preserve-modification-time")]
     preserve_mtime: bool,
+    /// Do not print informational messages.
+    #[arg(short = 'q', long = "quiet")]
+    quiet: bool,
     /// CPIO format.
     #[arg(
         value_enum,

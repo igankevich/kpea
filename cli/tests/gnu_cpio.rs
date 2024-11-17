@@ -49,11 +49,13 @@ where
     let files_cpio = workdir.path().join("files.cpio");
     let unpack_dir = workdir.path().join("unpacked");
     let mut cpio2 = cpio2();
+    cpio2.arg("--quiet");
     cpio2.arg("-i");
     cpio2.arg("--preserve-modification-time");
     arbtest(|u| {
         let format = u.choose(&["newc", "odc"]).unwrap();
         let mut cpio1 = cpio1();
+        cpio1.arg("--quiet");
         cpio1.arg("--null");
         cpio1.arg(format!("--format={}", format));
         cpio1.arg("-o");
