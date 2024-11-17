@@ -160,6 +160,7 @@ dependencies = [
  "libc",
  "log",
  "normalize-path",
+ "similar-asserts",
  "tempfile",
  "walkdir",
 ]

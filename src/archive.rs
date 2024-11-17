@@ -434,6 +434,7 @@ mod tests {
     use std::fs::remove_dir_all;
 
     use arbtest::arbtest;
+    use cpio_test::list_dir_all;
     use cpio_test::DirectoryOfFiles;
     use tempfile::TempDir;
     use walkdir::WalkDir;
@@ -499,66 +500,28 @@ mod tests {
             archive.unpack(&unpack_dir).unwrap();
             let files1 = list_dir_all(directory.path()).unwrap();
             let files2 = list_dir_all(&unpack_dir).unwrap();
-            assert_eq!(
-                files1.iter().map(|x| &x.path).collect::<Vec<_>>(),
-                files2.iter().map(|x| &x.path).collect::<Vec<_>>()
-            );
-            assert_eq!(
-                files1.iter().map(|x| &x.metadata).collect::<Vec<_>>(),
-                files2.iter().map(|x| &x.metadata).collect::<Vec<_>>()
-            );
-            assert_eq!(files1, files2);
+            similar_asserts::assert_eq!(files1, files2);
             Ok(())
         });
     }
 
-    fn list_dir_all<P: AsRef<Path>>(dir: P) -> Result<Vec<FileInfo>, Error> {
-        let dir = dir.as_ref();
-        let mut files = Vec::new();
-        for entry in WalkDir::new(dir).into_iter() {
-            let entry = entry?;
-            let metadata = entry.path().symlink_metadata()?;
-            let contents = if metadata.is_file() {
-                std::fs::read(entry.path()).unwrap()
-            } else if metadata.is_symlink() {
-                let target = read_link(entry.path()).unwrap();
-                target.as_os_str().as_bytes().to_vec()
-            } else {
-                Vec::new()
-            };
-            let path = entry.path().strip_prefix(dir).map_err(Error::other)?;
-            let metadata: Metadata = (&metadata).try_into()?;
-            files.push(FileInfo {
-                path: path.to_path_buf(),
-                metadata,
-                contents,
-            });
-        }
-        files.sort_by(|a, b| a.path.cmp(&b.path));
-        // remap inodes
-        use std::collections::hash_map::Entry::*;
-        let mut inodes = HashMap::new();
-        let mut next_inode = 0;
-        for file in files.iter_mut() {
-            let old = file.metadata.ino;
-            let inode = match inodes.entry(old) {
-                Vacant(v) => {
-                    let inode = next_inode;
-                    v.insert(next_inode);
-                    next_inode += 1;
-                    inode
-                }
-                Occupied(o) => *o.get(),
-            };
-            file.metadata.ino = inode;
-        }
-        Ok(files)
-    }
-
-    #[derive(PartialEq, Eq, Debug, Clone)]
-    struct FileInfo {
-        path: PathBuf,
-        metadata: Metadata,
-        contents: Vec<u8>,
+    #[test]
+    fn cpio_pack_unpack() {
+        let workdir = TempDir::new().unwrap();
+        arbtest(|u| {
+            let directory: DirectoryOfFiles = u.arbitrary()?;
+            let cpio_path = workdir.path().join("test.cpio");
+            CpioBuilder::pack(File::create(&cpio_path).unwrap(), directory.path()).unwrap();
+            let unpack_dir = workdir.path().join("unpacked");
+            remove_dir_all(&unpack_dir).ok();
+            let reader = File::open(&cpio_path).unwrap();
+            let mut archive = CpioArchive::new(reader);
+            archive.preserve_modification_time(true);
+            archive.unpack(&unpack_dir).unwrap();
+            let files1 = list_dir_all(directory.path()).unwrap();
+            let files2 = list_dir_all(&unpack_dir).unwrap();
+            similar_asserts::assert_eq!(files1, files2);
+            Ok(())
+        });
     }
 }
