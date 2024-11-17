@@ -3,6 +3,7 @@ name = "kpea"
 version.workspace = true
 edition = "2021"
 license.workspace = true
+description = "CPIO archive reader/writer library. Supports New ASCII and Old character formats. Fuzz-tested against GNU cpio."
 
 [dependencies]
 libc = "0.2.162"
