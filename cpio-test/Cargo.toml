@@ -1,7 +1,8 @@
 [package]
 name = "cpio-test"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
+license.workspace = true
 
 [dependencies]
 arbitrary = { version = "1.4.1", features = ["derive", "derive_arbitrary"] }

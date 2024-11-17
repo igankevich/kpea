@@ -228,7 +228,6 @@ dependencies = [
  "arbitrary",
  "arbtest",
  "cpio-test",
- "kpea",
  "libc",
  "normalize-path",
  "similar-asserts",
