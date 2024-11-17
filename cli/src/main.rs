@@ -61,15 +61,14 @@ fn copy_out(args: Args) -> Result<(), Error> {
 
 fn copy_in(args: Args) -> Result<(), Error> {
     let mut archive = CpioArchive::new(std::io::stdin());
-    archive.preserve_modification_time(args.preserve_modification_time);
+    archive.preserve_mtime(args.preserve_mtime);
     archive.unpack(Path::new("."))?;
     Ok(())
 }
 
 fn list_contents() -> Result<(), Error> {
     let mut archive = CpioArchive::new(std::io::stdin());
-    for entry in archive.iter() {
-        let entry = entry?;
+    while let Some(entry) = archive.read_entry()? {
         println!("{}", entry.name.display());
     }
     Ok(())
@@ -137,7 +136,7 @@ struct Args {
     null_terminated: bool,
     /// Preserve file modification time.
     #[arg(short = 'm', long = "preserve-modification-time")]
-    preserve_modification_time: bool,
+    preserve_mtime: bool,
     /// CPIO format.
     #[arg(
         value_enum,

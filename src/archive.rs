@@ -11,7 +11,6 @@ use std::io::IoSliceMut;
 use std::io::Read;
 use std::io::Take;
 use std::io::Write;
-use std::iter::FusedIterator;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::symlink;
@@ -39,7 +38,7 @@ pub struct CpioArchive<R: Read> {
     reader: R,
     // Inode -> file contents mapping for files that have > 1 hard links.
     contents: HashMap<u64, Vec<u8>>,
-    preserve_modification_time: bool,
+    preserve_mtime: bool,
     preserve_owner: bool,
 }
 
@@ -48,7 +47,7 @@ impl<R: Read> CpioArchive<R> {
         Self {
             reader,
             contents: Default::default(),
-            preserve_modification_time: false,
+            preserve_mtime: false,
             preserve_owner: false,
         }
     }
@@ -56,8 +55,8 @@ impl<R: Read> CpioArchive<R> {
     /// Preserve file modification time.
     ///
     /// `false` by default.
-    pub fn preserve_modification_time(&mut self, value: bool) {
-        self.preserve_modification_time = value;
+    pub fn preserve_mtime(&mut self, value: bool) {
+        self.preserve_mtime = value;
     }
 
     /// Preserve the user and group IDs associated with the files.
@@ -65,10 +64,6 @@ impl<R: Read> CpioArchive<R> {
     /// `false` by default.
     pub fn preserve_owner(&mut self, value: bool) {
         self.preserve_owner = value;
-    }
-
-    pub fn iter(&mut self) -> Iter<R> {
-        Iter::new(self)
     }
 
     pub fn get_mut(&mut self) -> &mut R {
@@ -91,10 +86,9 @@ impl<R: Read> CpioArchive<R> {
         let mut dirs = Vec::new();
         // inode -> path
         let mut hard_links = HashMap::new();
-        let preserve_modification_time = self.preserve_modification_time;
+        let preserve_mtime = self.preserve_mtime;
         let preserve_owner = self.preserve_owner;
-        for entry in self.iter() {
-            let mut entry = entry?;
+        while let Some(mut entry) = self.read_entry()? {
             let path = match entry.name.strip_prefix("/") {
                 Ok(path) => path,
                 Err(_) => entry.name.as_path(),
@@ -134,7 +128,7 @@ impl<R: Read> CpioArchive<R> {
                         }
                         let mut file = File::options().write(true).truncate(true).open(&path)?;
                         entry.reader.copy_to(&mut file)?;
-                        if preserve_modification_time {
+                        if preserve_mtime {
                             if let Ok(modified) = entry.metadata.modified() {
                                 file.set_modified(modified)?;
                             }
@@ -157,7 +151,7 @@ impl<R: Read> CpioArchive<R> {
                     let mut file = File::create(&path)?;
                     let n = entry.reader.copy_to(&mut file)?;
                     debug_assert!(n == entry.metadata.file_size);
-                    if preserve_modification_time {
+                    if preserve_mtime {
                         if let Ok(modified) = entry.metadata.modified() {
                             file.set_modified(modified)?;
                         }
@@ -174,7 +168,7 @@ impl<R: Read> CpioArchive<R> {
                 FileType::Directory => {
                     // create directory with default permissions
                     create_dir(&path)?;
-                    if preserve_modification_time {
+                    if preserve_mtime {
                         if let Ok(modified) = entry.metadata.modified() {
                             File::open(&path)?.set_modified(modified)?;
                         }
@@ -192,7 +186,7 @@ impl<R: Read> CpioArchive<R> {
                 FileType::Fifo => {
                     let path = path_to_c_string(path)?;
                     mkfifo(&path, entry.metadata.mode)?;
-                    if preserve_modification_time {
+                    if preserve_mtime {
                         if let Ok(modified) = entry.metadata.modified() {
                             set_file_modified_time(&path, modified)?;
                         }
@@ -204,7 +198,7 @@ impl<R: Read> CpioArchive<R> {
                 FileType::Socket => {
                     UnixDatagram::bind(&path)?;
                     let path = path_to_c_string(path)?;
-                    if preserve_modification_time {
+                    if preserve_mtime {
                         if let Ok(modified) = entry.metadata.modified() {
                             set_file_modified_time(&path, modified)?;
                         }
@@ -216,7 +210,7 @@ impl<R: Read> CpioArchive<R> {
                 FileType::BlockDevice | FileType::CharDevice => {
                     let path = path_to_c_string(path)?;
                     mknod(&path, entry.metadata.mode, entry.metadata.rdev())?;
-                    if preserve_modification_time {
+                    if preserve_mtime {
                         if let Ok(modified) = entry.metadata.modified() {
                             set_file_modified_time(&path, modified)?;
                         }
@@ -251,7 +245,7 @@ impl<R: Read> CpioArchive<R> {
         Ok(())
     }
 
-    fn read_entry(&mut self) -> Result<Option<Entry<R>>, Error> {
+    pub fn read_entry(&mut self) -> Result<Option<Entry<R>>, Error> {
         let Some((metadata, format)) = Metadata::read_some(self.reader.by_ref())? else {
             return Ok(None);
         };
@@ -386,43 +380,6 @@ impl<'a, R: Read> Drop for Entry<'a, R> {
     }
 }
 
-pub struct Iter<'a, R: Read> {
-    archive: &'a mut CpioArchive<R>,
-    finished: bool,
-}
-
-impl<'a, R: Read> Iter<'a, R> {
-    fn new(archive: &'a mut CpioArchive<R>) -> Self {
-        Self {
-            archive,
-            finished: false,
-        }
-    }
-}
-
-impl<'a, R: Read> Iterator for Iter<'a, R> {
-    type Item = Result<Entry<'a, R>, Error>;
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.finished {
-            return None;
-        }
-        match self.archive.read_entry() {
-            Ok(Some(entry)) => {
-                // TODO safe?
-                let entry = unsafe { std::mem::transmute::<Entry<'_, R>, Entry<'a, R>>(entry) };
-                Some(Ok(entry))
-            }
-            Ok(None) => {
-                self.finished = true;
-                None
-            }
-            Err(e) => Some(Err(e)),
-        }
-    }
-}
-
-impl<'a, R: Read> FusedIterator for Iter<'a, R> {}
-
 fn is_writable(mode: u32) -> bool {
     (((mode & FILE_MODE_MASK) >> 8) & FILE_WRITE_BIT) != 0
 }
@@ -482,8 +439,7 @@ mod tests {
             let mut archive = CpioArchive::new(reader);
             let mut actual_headers = Vec::new();
             let mut actual_files = Vec::new();
-            for entry in archive.iter() {
-                let mut entry = entry.unwrap();
+            while let Some(mut entry) = archive.read_entry().unwrap() {
                 let mut contents = Vec::new();
                 entry.reader.read_to_end(&mut contents).unwrap();
                 actual_headers.push((entry.name.clone(), entry.metadata.clone()));
@@ -496,7 +452,7 @@ mod tests {
             remove_dir_all(&unpack_dir).ok();
             let reader = File::open(&cpio_path).unwrap();
             let mut archive = CpioArchive::new(reader);
-            archive.preserve_modification_time(true);
+            archive.preserve_mtime(true);
             archive.unpack(&unpack_dir).unwrap();
             let files1 = list_dir_all(directory.path()).unwrap();
             let files2 = list_dir_all(&unpack_dir).unwrap();
@@ -516,7 +472,7 @@ mod tests {
             remove_dir_all(&unpack_dir).ok();
             let reader = File::open(&cpio_path).unwrap();
             let mut archive = CpioArchive::new(reader);
-            archive.preserve_modification_time(true);
+            archive.preserve_mtime(true);
             archive.unpack(&unpack_dir).unwrap();
             let files1 = list_dir_all(directory.path()).unwrap();
             let files2 = list_dir_all(&unpack_dir).unwrap();

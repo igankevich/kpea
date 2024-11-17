@@ -94,6 +94,7 @@ impl Metadata {
     }
 
     /// Get file size in bytes.
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> u64 {
         self.file_size
     }
