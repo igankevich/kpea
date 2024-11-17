@@ -1,4 +1,3 @@
-use std::fs::Metadata;
 use std::io::Error;
 use std::io::ErrorKind;
 use std::io::Read;
@@ -17,7 +16,7 @@ use crate::FileType;
 // https://people.freebsd.org/~kientzle/libarchive/man/cpio.5.txt
 #[derive(Clone, Debug)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
-pub struct Header {
+pub struct Metadata {
     // TODO remove?
     pub(crate) format: Format,
     pub(crate) dev: u64,
@@ -32,7 +31,7 @@ pub struct Header {
     pub(crate) file_size: u64,
 }
 
-impl Header {
+impl Metadata {
     /// Get file type bits from the mode.
     pub fn file_type(&self) -> Result<FileType, Error> {
         self.mode.try_into()
@@ -107,8 +106,8 @@ impl Header {
         if nread != MAGIC_LEN {
             return Ok(None);
         }
-        let header = Self::do_read(reader, magic)?;
-        Ok(Some(header))
+        let metadata = Self::do_read(reader, magic)?;
+        Ok(Some(metadata))
     }
 
     #[allow(unused)]
@@ -259,9 +258,9 @@ impl Header {
     }
 }
 
-impl TryFrom<&Metadata> for Header {
+impl TryFrom<&std::fs::Metadata> for Metadata {
     type Error = Error;
-    fn try_from(other: &Metadata) -> Result<Self, Error> {
+    fn try_from(other: &std::fs::Metadata) -> Result<Self, Error> {
         Ok(Self {
             format: Format::Newc,
             dev: other.dev(),
@@ -306,21 +305,21 @@ mod tests {
     #[test]
     fn odc_header_write_read_symmetry() {
         arbtest(|u| {
-            let expected: Header = u.arbitrary::<OdcHeader>()?.0;
+            let expected: Metadata = u.arbitrary::<OdcHeader>()?.0;
             let mut bytes = Vec::new();
             expected.write(&mut bytes).unwrap();
-            let actual = Header::read(&bytes[..]).unwrap();
+            let actual = Metadata::read(&bytes[..]).unwrap();
             assert_eq!(expected, actual);
             Ok(())
         });
     }
 
     #[derive(Debug, PartialEq, Eq)]
-    struct OdcHeader(Header);
+    struct OdcHeader(Metadata);
 
     impl<'a> Arbitrary<'a> for OdcHeader {
         fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
-            Ok(Self(Header {
+            Ok(Self(Metadata {
                 format: Format::Odc,
                 dev: u.int_in_range(0..=MAX_6 as u64)?,
                 ino: u.int_in_range(0..=MAX_6)? as u64,
@@ -339,21 +338,21 @@ mod tests {
     #[test]
     fn newc_header_write_read_symmetry() {
         arbtest(|u| {
-            let expected: Header = u.arbitrary::<NewcHeader>()?.0;
+            let expected: Metadata = u.arbitrary::<NewcHeader>()?.0;
             let mut bytes = Vec::new();
             expected.write(&mut bytes).unwrap();
-            let actual = Header::read(&bytes[..]).unwrap();
+            let actual = Metadata::read(&bytes[..]).unwrap();
             assert_eq!(expected, actual);
             Ok(())
         });
     }
 
     #[derive(Debug, PartialEq, Eq)]
-    struct NewcHeader(Header);
+    struct NewcHeader(Metadata);
 
     impl<'a> Arbitrary<'a> for NewcHeader {
         fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
-            Ok(Self(Header {
+            Ok(Self(Metadata {
                 format: Format::Newc,
                 dev: u.int_in_range(0..=MAX_8 as u64)?,
                 ino: u.int_in_range(0..=MAX_8)? as u64,

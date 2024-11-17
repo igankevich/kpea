@@ -6,7 +6,6 @@ use std::fs::hard_link;
 use std::fs::read_link;
 use std::fs::DirBuilder;
 use std::fs::File;
-use std::fs::Metadata;
 use std::fs::Permissions;
 use std::io::Error;
 use std::io::Write;
@@ -179,10 +178,10 @@ pub fn list_dir_all<P: AsRef<Path>>(dir: P) -> Result<Vec<FileInfo>, Error> {
             Vec::new()
         };
         let path = entry.path().strip_prefix(dir).map_err(Error::other)?;
-        let header: Header = (&metadata).try_into()?;
+        let metadata: Metadata = (&metadata).try_into()?;
         files.push(FileInfo {
             path: path.to_path_buf(),
-            header,
+            metadata,
             contents,
         });
     }
@@ -192,7 +191,7 @@ pub fn list_dir_all<P: AsRef<Path>>(dir: P) -> Result<Vec<FileInfo>, Error> {
     let mut inodes = HashMap::new();
     let mut next_inode = 0;
     for file in files.iter_mut() {
-        let old = file.header.ino;
+        let old = file.metadata.ino;
         let inode = match inodes.entry(old) {
             Vacant(v) => {
                 let inode = next_inode;
@@ -202,7 +201,7 @@ pub fn list_dir_all<P: AsRef<Path>>(dir: P) -> Result<Vec<FileInfo>, Error> {
             }
             Occupied(o) => *o.get(),
         };
-        file.header.ino = inode;
+        file.metadata.ino = inode;
     }
     Ok(files)
 }
@@ -210,12 +209,12 @@ pub fn list_dir_all<P: AsRef<Path>>(dir: P) -> Result<Vec<FileInfo>, Error> {
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct FileInfo {
     pub path: PathBuf,
-    pub header: Header,
+    pub metadata: Metadata,
     pub contents: Vec<u8>,
 }
 
 #[derive(PartialEq, Eq, Clone, Debug)]
-pub struct Header {
+pub struct Metadata {
     pub dev: u64,
     pub ino: u64,
     pub mode: u32,
@@ -227,9 +226,9 @@ pub struct Header {
     pub file_size: u64,
 }
 
-impl TryFrom<&Metadata> for Header {
+impl TryFrom<&std::fs::Metadata> for Metadata {
     type Error = Error;
-    fn try_from(other: &Metadata) -> Result<Self, Error> {
+    fn try_from(other: &std::fs::Metadata) -> Result<Self, Error> {
         use std::os::unix::fs::MetadataExt;
         Ok(Self {
             dev: other.dev(),

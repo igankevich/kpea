@@ -31,7 +31,7 @@ use crate::path_to_c_string;
 use crate::set_file_modified_time;
 use crate::FileType;
 use crate::Format;
-use crate::Header;
+use crate::Metadata;
 
 // TODO optimize inodes for Read + Seek
 pub struct CpioArchive<R: Read> {
@@ -99,20 +99,20 @@ impl<R: Read> CpioArchive<R> {
             eprintln!(
                 "unpacking file {:?} mode {:#o} type {:?} size {}",
                 path,
-                entry.header.mode,
-                entry.header.file_type()?,
-                entry.header.file_size,
+                entry.metadata.mode,
+                entry.metadata.file_type()?,
+                entry.metadata.file_size,
             );
-            match hard_links.entry(entry.header.ino()) {
+            match hard_links.entry(entry.metadata.ino()) {
                 Vacant(v) => {
-                    v.insert((path.clone(), entry.header.file_size));
+                    v.insert((path.clone(), entry.metadata.file_size));
                 }
                 Occupied(o) => {
                     let (original, original_file_size) = o.get();
                     eprintln!("hard link {:?} -> {:?}", path, original);
                     hard_link(original, &path)?;
-                    if entry.header.file_type()? == FileType::Regular
-                        && *original_file_size < entry.header.file_size
+                    if entry.metadata.file_type()? == FileType::Regular
+                        && *original_file_size < entry.metadata.file_size
                     {
                         let old_mode = path.metadata()?.mode();
                         if !is_writable(old_mode) {
@@ -122,7 +122,7 @@ impl<R: Read> CpioArchive<R> {
                         let mut file = File::options().write(true).truncate(true).open(&path)?;
                         entry.reader.copy_to(&mut file)?;
                         if preserve_modification_time {
-                            if let Ok(modified) = entry.header.modified() {
+                            if let Ok(modified) = entry.metadata.modified() {
                                 file.set_modified(modified)?;
                             }
                         }
@@ -132,35 +132,35 @@ impl<R: Read> CpioArchive<R> {
                     continue;
                 }
             }
-            match entry.header.file_type()? {
+            match entry.metadata.file_type()? {
                 FileType::Regular => {
                     let mut file = File::create(&path)?;
                     let n = entry.reader.copy_to(&mut file)?;
                     eprintln!("size {}", n);
                     if preserve_modification_time {
-                        if let Ok(modified) = entry.header.modified() {
+                        if let Ok(modified) = entry.metadata.modified() {
                             file.set_modified(modified)?;
                         }
                     }
-                    file.set_permissions(Permissions::from_mode(entry.header.file_mode()))?;
+                    file.set_permissions(Permissions::from_mode(entry.metadata.file_mode()))?;
                 }
                 FileType::Directory => {
                     // create directory with default permissions
                     create_dir(&path)?;
                     if preserve_modification_time {
-                        if let Ok(modified) = entry.header.modified() {
+                        if let Ok(modified) = entry.metadata.modified() {
                             File::open(&path)?.set_modified(modified)?;
                         }
                     }
                     // apply proper permissions later when we have written all other files
-                    dirs.push((path, entry.header.file_mode()));
+                    dirs.push((path, entry.metadata.file_mode()));
                 }
                 FileType::Fifo => {
                     eprintln!("mkfifo {:?}", path);
                     let path = path_to_c_string(path)?;
-                    mkfifo(&path, entry.header.mode)?;
+                    mkfifo(&path, entry.metadata.mode)?;
                     if preserve_modification_time {
-                        if let Ok(modified) = entry.header.modified() {
+                        if let Ok(modified) = entry.metadata.modified() {
                             set_file_modified_time(&path, modified)?;
                         }
                     }
@@ -168,7 +168,7 @@ impl<R: Read> CpioArchive<R> {
                 FileType::Socket => {
                     UnixDatagram::bind(&path)?;
                     if preserve_modification_time {
-                        if let Ok(modified) = entry.header.modified() {
+                        if let Ok(modified) = entry.metadata.modified() {
                             let path = path_to_c_string(path)?;
                             set_file_modified_time(&path, modified)?;
                         }
@@ -176,9 +176,9 @@ impl<R: Read> CpioArchive<R> {
                 }
                 FileType::BlockDevice | FileType::CharDevice => {
                     let path = path_to_c_string(path)?;
-                    mknod(&path, entry.header.mode, entry.header.rdev())?;
+                    mknod(&path, entry.metadata.mode, entry.metadata.rdev())?;
                     if preserve_modification_time {
-                        if let Ok(modified) = entry.header.modified() {
+                        if let Ok(modified) = entry.metadata.modified() {
                             set_file_modified_time(&path, modified)?;
                         }
                     }
@@ -204,44 +204,44 @@ impl<R: Read> CpioArchive<R> {
     }
 
     fn read_entry(&mut self) -> Result<Option<Entry<R>>, Error> {
-        let Some(header) = Header::read_some(self.reader.by_ref())? else {
+        let Some(metadata) = Metadata::read_some(self.reader.by_ref())? else {
             return Ok(None);
         };
         let name = read_path_buf(
             self.reader.by_ref(),
-            header.name_len as usize,
-            header.format,
+            metadata.name_len as usize,
+            metadata.format,
         )?;
         if name.as_os_str().as_bytes() == TRAILER.to_bytes() {
             return Ok(None);
         }
         // TODO file size == 0 vs. file size != 0 ???
-        if header.file_size != 0
-            && header.nlink > 1
-            && matches!(header.format, Format::Newc | Format::Crc)
+        if metadata.file_size != 0
+            && metadata.nlink > 1
+            && matches!(metadata.format, Format::Newc | Format::Crc)
         {
             let mut contents = Vec::new();
             std::io::copy(
-                &mut self.reader.by_ref().take(header.file_size),
+                &mut self.reader.by_ref().take(metadata.file_size),
                 &mut contents,
             )?;
-            self.contents.insert(header.ino, contents);
+            self.contents.insert(metadata.ino, contents);
         }
         // TODO check if this is not a directory
         let known_contents =
-            if header.nlink > 1 && matches!(header.format, Format::Newc | Format::Crc) {
+            if metadata.nlink > 1 && matches!(metadata.format, Format::Newc | Format::Crc) {
                 // TODO optimize insert/get
-                let contents = self.contents.get(&header.ino).map(|x| x.as_slice());
+                let contents = self.contents.get(&metadata.ino).map(|x| x.as_slice());
                 contents
             } else {
                 None
             };
         let reader = match known_contents {
             Some(slice) => EntryReader::Slice(slice, self.reader.by_ref()),
-            None => EntryReader::Stream(self.reader.by_ref().take(header.file_size)),
+            None => EntryReader::Stream(self.reader.by_ref().take(metadata.file_size)),
         };
         Ok(Some(Entry {
-            header,
+            metadata,
             name,
             reader,
         }))
@@ -278,7 +278,7 @@ impl<'a, R: Read> EntryReader<'a, R> {
         }
     }
 
-    fn discard(&mut self, header: &Header) -> Result<(), Error> {
+    fn discard(&mut self, metadata: &Metadata) -> Result<(), Error> {
         match self {
             Self::Stream(ref mut reader) => {
                 // discard the remaining bytes
@@ -290,8 +290,8 @@ impl<'a, R: Read> EntryReader<'a, R> {
         }
         let reader = self.get_mut();
         // handle padding
-        if matches!(header.format, Format::Newc | Format::Crc) {
-            let n = header.file_size as usize;
+        if matches!(metadata.format, Format::Newc | Format::Crc) {
+            let n = metadata.file_size as usize;
             read_padding(reader, n)?;
         }
         Ok(())
@@ -336,14 +336,14 @@ impl<'a, R: Read> Read for EntryReader<'a, R> {
 }
 
 pub struct Entry<'a, R: Read> {
-    pub header: Header,
+    pub metadata: Metadata,
     pub name: PathBuf,
     pub reader: EntryReader<'a, R>,
 }
 
 impl<'a, R: Read> Drop for Entry<'a, R> {
     fn drop(&mut self) {
-        let _ = self.reader.discard(&self.header);
+        let _ = self.reader.discard(&self.metadata);
     }
 }
 
@@ -421,10 +421,10 @@ mod tests {
                 if entry_path == Path::new("") {
                     continue;
                 }
-                let (header, metadata) = builder
+                let (cpio_metadata, metadata) = builder
                     .append_path(entry.path(), entry_path.clone())
                     .unwrap();
-                expected_headers.push((entry_path, header));
+                expected_headers.push((entry_path, cpio_metadata));
                 let contents = if metadata.is_file() {
                     std::fs::read(entry.path()).unwrap()
                 } else if metadata.is_symlink() {
@@ -446,7 +446,7 @@ mod tests {
                 let mut entry = entry.unwrap();
                 let mut contents = Vec::new();
                 entry.reader.read_to_end(&mut contents).unwrap();
-                actual_headers.push((entry.name.clone(), entry.header.clone()));
+                actual_headers.push((entry.name.clone(), entry.metadata.clone()));
                 actual_files.push(contents);
             }
             assert_eq!(expected_headers, actual_headers);
@@ -465,8 +465,8 @@ mod tests {
                 files2.iter().map(|x| &x.path).collect::<Vec<_>>()
             );
             assert_eq!(
-                files1.iter().map(|x| &x.header).collect::<Vec<_>>(),
-                files2.iter().map(|x| &x.header).collect::<Vec<_>>()
+                files1.iter().map(|x| &x.metadata).collect::<Vec<_>>(),
+                files2.iter().map(|x| &x.metadata).collect::<Vec<_>>()
             );
             assert_eq!(files1, files2);
             Ok(())
@@ -488,10 +488,10 @@ mod tests {
                 Vec::new()
             };
             let path = entry.path().strip_prefix(dir).map_err(Error::other)?;
-            let header: Header = (&metadata).try_into()?;
+            let metadata: Metadata = (&metadata).try_into()?;
             files.push(FileInfo {
                 path: path.to_path_buf(),
-                header,
+                metadata,
                 contents,
             });
         }
@@ -501,7 +501,7 @@ mod tests {
         let mut inodes = HashMap::new();
         let mut next_inode = 0;
         for file in files.iter_mut() {
-            let old = file.header.ino;
+            let old = file.metadata.ino;
             let inode = match inodes.entry(old) {
                 Vacant(v) => {
                     let inode = next_inode;
@@ -511,7 +511,7 @@ mod tests {
                 }
                 Occupied(o) => *o.get(),
             };
-            file.header.ino = inode;
+            file.metadata.ino = inode;
         }
         Ok(files)
     }
@@ -519,7 +519,7 @@ mod tests {
     #[derive(PartialEq, Eq, Debug, Clone)]
     struct FileInfo {
         path: PathBuf,
-        header: Header,
+        metadata: Metadata,
         contents: Vec<u8>,
     }
 }

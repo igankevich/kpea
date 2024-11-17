@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::fs::read_link;
 use std::fs::File;
-use std::fs::Metadata;
 use std::io::Error;
 use std::io::Read;
 use std::io::Write;
@@ -14,7 +13,7 @@ use walkdir::WalkDir;
 use crate::constants::*;
 use crate::io::*;
 use crate::Format;
-use crate::Header;
+use crate::Metadata;
 
 pub struct CpioBuilder<W: Write> {
     writer: W,
@@ -40,51 +39,51 @@ impl<W: Write> CpioBuilder<W> {
 
     pub fn write_entry<P: AsRef<Path>, R: Read>(
         &mut self,
-        mut header: Header,
+        mut metadata: Metadata,
         name: P,
         mut data: R,
-    ) -> Result<Header, Error> {
-        self.fix_header(&mut header, name.as_ref())?;
-        header.write(self.writer.by_ref())?;
+    ) -> Result<Metadata, Error> {
+        self.fix_header(&mut metadata, name.as_ref())?;
+        metadata.write(self.writer.by_ref())?;
         write_path(self.writer.by_ref(), name.as_ref(), self.format)?;
-        if header.file_size != 0 {
+        if metadata.file_size != 0 {
             let n = std::io::copy(&mut data, self.writer.by_ref())?;
             if matches!(self.format, Format::Newc | Format::Crc) {
                 write_padding(self.writer.by_ref(), n as usize)?;
             }
         }
-        Ok(header)
+        Ok(metadata)
     }
 
     pub fn append_path<P1: AsRef<Path>, P2: AsRef<Path>>(
         &mut self,
         path: P1,
         name: P2,
-    ) -> Result<(Header, Metadata), Error> {
+    ) -> Result<(Metadata, std::fs::Metadata), Error> {
         let path = path.as_ref();
-        let metadata = path.symlink_metadata()?;
-        let mut header: Header = (&metadata).try_into()?;
+        let fs_metadata = path.symlink_metadata()?;
+        let mut cpio_metadata: Metadata = (&fs_metadata).try_into()?;
         eprintln!(
             "append path {:?} mode {:#o} type {:?}",
             path.display(),
-            header.mode,
-            header.file_type()
+            cpio_metadata.mode,
+            cpio_metadata.file_type()
         );
-        let header = if metadata.is_symlink() {
+        let cpio_metadata = if fs_metadata.is_symlink() {
             let target = read_link(path)?;
             let mut target = target.into_os_string().into_vec();
             target.push(0_u8);
-            header.file_size = target.len() as u64;
+            cpio_metadata.file_size = target.len() as u64;
             eprintln!("append path symlink {:?} -> {:?}", name.as_ref(), target);
-            self.write_entry(header, name, &target[..])?
-        } else if metadata.is_file() {
-            self.write_entry(header, name, File::open(path)?)?
+            self.write_entry(cpio_metadata, name, &target[..])?
+        } else if fs_metadata.is_file() {
+            self.write_entry(cpio_metadata, name, File::open(path)?)?
         } else {
             // directory, block/character device, socket, fifo
-            header.file_size = 0;
-            self.write_entry(header, name, std::io::empty())?
+            cpio_metadata.file_size = 0;
+            self.write_entry(cpio_metadata, name, std::io::empty())?
         };
-        Ok((header, metadata))
+        Ok((cpio_metadata, fs_metadata))
     }
 
     pub fn pack<P: AsRef<Path>>(writer: W, directory: P) -> Result<W, Error> {
@@ -117,7 +116,7 @@ impl<W: Write> CpioBuilder<W> {
 
     fn write_trailer(&mut self) -> Result<(), Error> {
         let len = TRAILER.to_bytes_with_nul().len();
-        let header = Header {
+        let metadata = Metadata {
             format: self.format,
             dev: 0,
             ino: 0,
@@ -130,7 +129,7 @@ impl<W: Write> CpioBuilder<W> {
             name_len: len as u32,
             file_size: 0,
         };
-        header.write(self.writer.by_ref())?;
+        metadata.write(self.writer.by_ref())?;
         write_c_str(self.writer.by_ref(), TRAILER)?;
         if matches!(self.format, Format::Newc | Format::Crc) {
             write_padding(self.writer.by_ref(), NEWC_HEADER_LEN + len)?;
@@ -138,9 +137,9 @@ impl<W: Write> CpioBuilder<W> {
         Ok(())
     }
 
-    fn fix_header(&mut self, header: &mut Header, name: &Path) -> Result<(), Error> {
+    fn fix_header(&mut self, metadata: &mut Metadata, name: &Path) -> Result<(), Error> {
         use std::collections::hash_map::Entry::*;
-        let inode = match self.inodes.entry(header.ino) {
+        let inode = match self.inodes.entry(metadata.ino) {
             Vacant(v) => {
                 let inode = self.max_inode;
                 self.max_inode += 1;
@@ -149,8 +148,8 @@ impl<W: Write> CpioBuilder<W> {
             }
             Occupied(o) => {
                 if matches!(self.format, Format::Newc | Format::Crc) {
-                    eprintln!("duplicate inode {} {}", header.ino, name.display());
-                    header.file_size = 0;
+                    eprintln!("duplicate inode {} {}", metadata.ino, name.display());
+                    metadata.file_size = 0;
                 }
                 *o.get()
             }
@@ -165,9 +164,9 @@ impl<W: Write> CpioBuilder<W> {
             return Err(Error::other("file name is too long"));
         }
         // +1 due to null byte
-        header.name_len = (name_len + 1) as u32;
-        header.ino = inode as u64;
-        header.format = self.format;
+        metadata.name_len = (name_len + 1) as u32;
+        metadata.ino = inode as u64;
+        metadata.format = self.format;
         Ok(())
     }
 }
