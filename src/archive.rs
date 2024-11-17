@@ -211,29 +211,26 @@ impl<R: Read> CpioArchive<R> {
         if name.as_os_str().as_bytes() == TRAILER.to_bytes() {
             return Ok(None);
         }
-        // TODO file size == 0 vs. file size != 0 ???
-        if metadata.file_size != 0
-            && metadata.nlink > 1
-            && matches!(format, Format::Newc | Format::Crc)
-        {
-            let mut contents = Vec::new();
-            std::io::copy(
-                &mut self.reader.by_ref().take(metadata.file_size),
-                &mut contents,
-            )?;
-            self.contents.insert(metadata.ino, contents);
-        }
-        // TODO check if this is not a directory
-        let known_contents = if metadata.nlink > 1 && matches!(format, Format::Newc | Format::Crc) {
-            // TODO optimize insert/get
+        let reader = if matches!(format, Format::Newc | Format::Crc) {
+            let file_type = metadata.file_type()?;
+            if metadata.file_size != 0
+                && metadata.nlink > 1
+                    && file_type != FileType::Directory
+            {
+                let mut contents = Vec::new();
+                std::io::copy(
+                    &mut self.reader.by_ref().take(metadata.file_size),
+                    &mut contents,
+                )?;
+                self.contents.insert(metadata.ino, contents);
+            }
             let contents = self.contents.get(&metadata.ino).map(|x| x.as_slice());
-            contents
+            match contents {
+                Some(slice) => EntryReader::Slice(slice, self.reader.by_ref()),
+                None => EntryReader::Stream(self.reader.by_ref().take(metadata.file_size)),
+            }
         } else {
-            None
-        };
-        let reader = match known_contents {
-            Some(slice) => EntryReader::Slice(slice, self.reader.by_ref()),
-            None => EntryReader::Stream(self.reader.by_ref().take(metadata.file_size)),
+            EntryReader::Stream(self.reader.by_ref().take(metadata.file_size))
         };
         Ok(Some(Entry {
             metadata,
