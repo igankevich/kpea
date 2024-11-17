@@ -44,7 +44,7 @@ impl<W: Write> CpioBuilder<W> {
         mut data: R,
     ) -> Result<Metadata, Error> {
         self.fix_header(&mut metadata, name.as_ref())?;
-        metadata.write(self.writer.by_ref())?;
+        metadata.write(self.writer.by_ref(), self.format)?;
         write_path(self.writer.by_ref(), name.as_ref(), self.format)?;
         if metadata.file_size != 0 {
             let n = std::io::copy(&mut data, self.writer.by_ref())?;
@@ -117,7 +117,6 @@ impl<W: Write> CpioBuilder<W> {
     fn write_trailer(&mut self) -> Result<(), Error> {
         let len = TRAILER.to_bytes_with_nul().len();
         let metadata = Metadata {
-            format: self.format,
             dev: 0,
             ino: 0,
             mode: 0,
@@ -129,7 +128,7 @@ impl<W: Write> CpioBuilder<W> {
             name_len: len as u32,
             file_size: 0,
         };
-        metadata.write(self.writer.by_ref())?;
+        metadata.write(self.writer.by_ref(), self.format)?;
         write_c_str(self.writer.by_ref(), TRAILER)?;
         if matches!(self.format, Format::Newc | Format::Crc) {
             write_padding(self.writer.by_ref(), NEWC_HEADER_LEN + len)?;
@@ -166,7 +165,6 @@ impl<W: Write> CpioBuilder<W> {
         // +1 due to null byte
         metadata.name_len = (name_len + 1) as u32;
         metadata.ino = inode as u64;
-        metadata.format = self.format;
         Ok(())
     }
 }

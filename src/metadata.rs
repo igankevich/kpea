@@ -17,8 +17,6 @@ use crate::FileType;
 #[derive(Clone, Debug)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct Metadata {
-    // TODO remove?
-    pub(crate) format: Format,
     pub(crate) dev: u64,
     pub(crate) ino: u64,
     pub(crate) mode: u32,
@@ -100,24 +98,24 @@ impl Metadata {
         self.file_size
     }
 
-    pub(crate) fn read_some<R: Read>(mut reader: R) -> Result<Option<Self>, Error> {
+    pub(crate) fn read_some<R: Read>(mut reader: R) -> Result<Option<(Self, Format)>, Error> {
         let mut magic = [0_u8; MAGIC_LEN];
         let nread = reader.read(&mut magic[..])?;
         if nread != MAGIC_LEN {
             return Ok(None);
         }
-        let metadata = Self::do_read(reader, magic)?;
-        Ok(Some(metadata))
+        let (metadata, format) = Self::do_read(reader, magic)?;
+        Ok(Some((metadata, format)))
     }
 
     #[allow(unused)]
-    fn read<R: Read>(mut reader: R) -> Result<Self, Error> {
+    fn read<R: Read>(mut reader: R) -> Result<(Self, Format), Error> {
         let mut magic = [0_u8; MAGIC_LEN];
         reader.read_exact(&mut magic[..])?;
         Self::do_read(reader, magic)
     }
 
-    fn do_read<R: Read>(reader: R, magic: [u8; MAGIC_LEN]) -> Result<Self, Error> {
+    fn do_read<R: Read>(reader: R, magic: [u8; MAGIC_LEN]) -> Result<(Self, Format), Error> {
         let format = if magic == ODC_MAGIC {
             Format::Odc
         } else if magic == NEWC_MAGIC {
@@ -128,13 +126,13 @@ impl Metadata {
             return Err(Error::other("not a cpio file"));
         };
         match format {
-            Format::Odc => Self::read_odc(reader),
-            Format::Newc | Format::Crc => Self::read_newc(reader),
+            Format::Odc => Ok((Self::read_odc(reader)?, format)),
+            Format::Newc | Format::Crc => Ok((Self::read_newc(reader)?, format)),
         }
     }
 
-    pub(crate) fn write<W: Write>(&self, writer: W) -> Result<(), Error> {
-        match self.format {
+    pub(crate) fn write<W: Write>(&self, writer: W, format: Format) -> Result<(), Error> {
+        match format {
             Format::Odc => self.write_odc(writer),
             Format::Newc | Format::Crc => self.write_newc(writer),
         }
@@ -152,7 +150,6 @@ impl Metadata {
         let name_len = read_octal_6(reader.by_ref())?;
         let file_size = read_octal_11(reader.by_ref())?;
         Ok(Self {
-            format: Format::Odc,
             dev: dev as u64,
             ino: ino as u64,
             mode,
@@ -211,7 +208,6 @@ impl Metadata {
         let name_len = read_hex_8(reader.by_ref())?;
         let _check = read_hex_8(reader.by_ref())?;
         Ok(Self {
-            format: Format::Newc,
             dev: makedev(dev_major, dev_minor),
             ino: ino as u64,
             mode,
@@ -262,7 +258,6 @@ impl TryFrom<&std::fs::Metadata> for Metadata {
     type Error = Error;
     fn try_from(other: &std::fs::Metadata) -> Result<Self, Error> {
         Ok(Self {
-            format: Format::Newc,
             dev: other.dev(),
             ino: other.ino(),
             mode: other.mode(),
@@ -306,10 +301,12 @@ mod tests {
     fn odc_header_write_read_symmetry() {
         arbtest(|u| {
             let expected: Metadata = u.arbitrary::<OdcHeader>()?.0;
+            let expected_format = Format::Odc;
             let mut bytes = Vec::new();
-            expected.write(&mut bytes).unwrap();
-            let actual = Metadata::read(&bytes[..]).unwrap();
+            expected.write(&mut bytes, expected_format).unwrap();
+            let (actual, actual_format) = Metadata::read(&bytes[..]).unwrap();
             assert_eq!(expected, actual);
+            assert_eq!(expected_format, actual_format);
             Ok(())
         });
     }
@@ -320,7 +317,6 @@ mod tests {
     impl<'a> Arbitrary<'a> for OdcHeader {
         fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
             Ok(Self(Metadata {
-                format: Format::Odc,
                 dev: u.int_in_range(0..=MAX_6 as u64)?,
                 ino: u.int_in_range(0..=MAX_6)? as u64,
                 mode: u.int_in_range(0..=MAX_6)?,
@@ -339,10 +335,12 @@ mod tests {
     fn newc_header_write_read_symmetry() {
         arbtest(|u| {
             let expected: Metadata = u.arbitrary::<NewcHeader>()?.0;
+            let expected_format = Format::Newc;
             let mut bytes = Vec::new();
-            expected.write(&mut bytes).unwrap();
-            let actual = Metadata::read(&bytes[..]).unwrap();
+            expected.write(&mut bytes, expected_format).unwrap();
+            let (actual, actual_format) = Metadata::read(&bytes[..]).unwrap();
             assert_eq!(expected, actual);
+            assert_eq!(expected_format, actual_format);
             Ok(())
         });
     }
@@ -353,7 +351,6 @@ mod tests {
     impl<'a> Arbitrary<'a> for NewcHeader {
         fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
             Ok(Self(Metadata {
-                format: Format::Newc,
                 dev: u.int_in_range(0..=MAX_8 as u64)?,
                 ino: u.int_in_range(0..=MAX_8)? as u64,
                 mode: u.int_in_range(0..=MAX_8)?,

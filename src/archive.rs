@@ -204,21 +204,17 @@ impl<R: Read> CpioArchive<R> {
     }
 
     fn read_entry(&mut self) -> Result<Option<Entry<R>>, Error> {
-        let Some(metadata) = Metadata::read_some(self.reader.by_ref())? else {
+        let Some((metadata, format)) = Metadata::read_some(self.reader.by_ref())? else {
             return Ok(None);
         };
-        let name = read_path_buf(
-            self.reader.by_ref(),
-            metadata.name_len as usize,
-            metadata.format,
-        )?;
+        let name = read_path_buf(self.reader.by_ref(), metadata.name_len as usize, format)?;
         if name.as_os_str().as_bytes() == TRAILER.to_bytes() {
             return Ok(None);
         }
         // TODO file size == 0 vs. file size != 0 ???
         if metadata.file_size != 0
             && metadata.nlink > 1
-            && matches!(metadata.format, Format::Newc | Format::Crc)
+            && matches!(format, Format::Newc | Format::Crc)
         {
             let mut contents = Vec::new();
             std::io::copy(
@@ -228,14 +224,13 @@ impl<R: Read> CpioArchive<R> {
             self.contents.insert(metadata.ino, contents);
         }
         // TODO check if this is not a directory
-        let known_contents =
-            if metadata.nlink > 1 && matches!(metadata.format, Format::Newc | Format::Crc) {
-                // TODO optimize insert/get
-                let contents = self.contents.get(&metadata.ino).map(|x| x.as_slice());
-                contents
-            } else {
-                None
-            };
+        let known_contents = if metadata.nlink > 1 && matches!(format, Format::Newc | Format::Crc) {
+            // TODO optimize insert/get
+            let contents = self.contents.get(&metadata.ino).map(|x| x.as_slice());
+            contents
+        } else {
+            None
+        };
         let reader = match known_contents {
             Some(slice) => EntryReader::Slice(slice, self.reader.by_ref()),
             None => EntryReader::Stream(self.reader.by_ref().take(metadata.file_size)),
@@ -244,6 +239,7 @@ impl<R: Read> CpioArchive<R> {
             metadata,
             name,
             reader,
+            format,
         }))
     }
 }
@@ -278,7 +274,7 @@ impl<'a, R: Read> EntryReader<'a, R> {
         }
     }
 
-    fn discard(&mut self, metadata: &Metadata) -> Result<(), Error> {
+    fn discard(&mut self, metadata: &Metadata, format: Format) -> Result<(), Error> {
         match self {
             Self::Stream(ref mut reader) => {
                 // discard the remaining bytes
@@ -290,7 +286,7 @@ impl<'a, R: Read> EntryReader<'a, R> {
         }
         let reader = self.get_mut();
         // handle padding
-        if matches!(metadata.format, Format::Newc | Format::Crc) {
+        if matches!(format, Format::Newc | Format::Crc) {
             let n = metadata.file_size as usize;
             read_padding(reader, n)?;
         }
@@ -339,11 +335,12 @@ pub struct Entry<'a, R: Read> {
     pub metadata: Metadata,
     pub name: PathBuf,
     pub reader: EntryReader<'a, R>,
+    pub format: Format,
 }
 
 impl<'a, R: Read> Drop for Entry<'a, R> {
     fn drop(&mut self) {
-        let _ = self.reader.discard(&self.metadata);
+        let _ = self.reader.discard(&self.metadata, self.format);
     }
 }
 
