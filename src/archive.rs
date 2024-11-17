@@ -419,6 +419,7 @@ mod tests {
     use crate::Builder;
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn cpio_write_read() {
         let workdir = TempDir::new().unwrap();
         arbtest(|u| {
@@ -481,6 +482,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn cpio_pack_unpack() {
         let workdir = TempDir::new().unwrap();
         arbtest(|u| {

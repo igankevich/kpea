@@ -13,11 +13,13 @@ pub struct WalkerOptions {
 }
 
 impl WalkerOptions {
+    #[allow(unused)]
     pub fn follow_symlinks(mut self, value: bool) -> Self {
         self.follow_symlinks = value;
         self
     }
 
+    #[allow(unused)]
     pub fn cross_device(mut self, value: bool) -> Self {
         self.cross_device = value;
         self
@@ -117,19 +119,5 @@ impl Walk for Path {
 impl Walk for PathBuf {
     fn walk(&self) -> Result<Walker, Error> {
         Walker::new(self)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn walk() {
-        let walker = Walker::new(Path::new(".")).unwrap();
-        for entry in walker {
-            let entry = entry.unwrap();
-            eprintln!("{:?}", entry.path());
-        }
     }
 }
