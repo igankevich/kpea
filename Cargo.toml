@@ -1,5 +1,5 @@
 [package]
-name = "cpio"
+name = "kpea"
 version = "0.1.0"
 edition = "2021"
 
@@ -14,7 +14,16 @@ cpio-test = { path = "cpio-test" }
 similar-asserts = "1.6.0"
 tempfile = "3.14.0"
 walkdir = "2.5.0"
+cpio = { package = "kpea", path = "." }
 
 [workspace]
 members = [".", "cli", "cpio-test"]
 default-members = [".", "cli"]
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+
+[lints.rust]
+missing_docs = "warn"

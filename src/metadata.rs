@@ -13,7 +13,9 @@ use crate::makedev;
 use crate::minor;
 use crate::FileType;
 
-// https://people.freebsd.org/~kientzle/libarchive/man/cpio.5.txt
+/// CPIO archive metadata.
+///
+/// See <https://people.freebsd.org/~kientzle/libarchive/man/cpio.5.txt> for more information.
 #[derive(Clone, Debug)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct Metadata {
@@ -273,11 +275,15 @@ impl TryFrom<&std::fs::Metadata> for Metadata {
     }
 }
 
+/// CPIO archive format.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub enum Format {
+    /// Old character format.
     Odc,
+    /// New ASCII format.
     Newc,
+    /// New CRC format.
     Crc,
 }
 

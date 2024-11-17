@@ -33,8 +33,9 @@ use crate::FileType;
 use crate::Format;
 use crate::Metadata;
 
-// TODO optimize inodes for Read + Seek
-pub struct CpioArchive<R: Read> {
+/// CPIO archive reader.
+pub struct Archive<R: Read> {
+    // TODO optimize inodes for Read + Seek
     reader: R,
     // Inode -> file contents mapping for files that have > 1 hard links.
     contents: HashMap<u64, Vec<u8>>,
@@ -42,7 +43,8 @@ pub struct CpioArchive<R: Read> {
     preserve_owner: bool,
 }
 
-impl<R: Read> CpioArchive<R> {
+impl<R: Read> Archive<R> {
+    /// Create new CPIO archive reader from the underlying `reader`.
     pub fn new(reader: R) -> Self {
         Self {
             reader,
@@ -59,25 +61,29 @@ impl<R: Read> CpioArchive<R> {
         self.preserve_mtime = value;
     }
 
-    /// Preserve the user and group IDs associated with the files.
+    /// Preserve file's user and group IDs.
     ///
     /// `false` by default.
     pub fn preserve_owner(&mut self, value: bool) {
         self.preserve_owner = value;
     }
 
+    /// Get mutable reference to the underyling reader.
     pub fn get_mut(&mut self) -> &mut R {
         self.reader.by_ref()
     }
 
-    pub fn get(&self) -> &R {
+    /// Get immutable reference to the underyling reader.
+    pub fn get_ref(&self) -> &R {
         &self.reader
     }
 
+    /// Convert into the underlying reader.
     pub fn into_inner(self) -> R {
         self.reader
     }
 
+    /// Unpack the archive to the target `directory`.
     pub fn unpack<P: AsRef<Path>>(mut self, directory: P) -> Result<(), Error> {
         use std::collections::hash_map::Entry::*;
         let directory = directory.as_ref();
@@ -89,9 +95,9 @@ impl<R: Read> CpioArchive<R> {
         let preserve_mtime = self.preserve_mtime;
         let preserve_owner = self.preserve_owner;
         while let Some(mut entry) = self.read_entry()? {
-            let path = match entry.name.strip_prefix("/") {
+            let path = match entry.path.strip_prefix("/") {
                 Ok(path) => path,
-                Err(_) => entry.name.as_path(),
+                Err(_) => entry.path.as_path(),
             };
             let path = directory.join(path).normalize();
             if !path.starts_with(&directory) {
@@ -234,12 +240,15 @@ impl<R: Read> CpioArchive<R> {
         Ok(())
     }
 
+    /// Read the next entry from the archive.
+    ///
+    /// Returns `Ok(None)` when the end of the archive is reached.
     pub fn read_entry(&mut self) -> Result<Option<Entry<R>>, Error> {
         let Some((metadata, format)) = Metadata::read_some(self.reader.by_ref())? else {
             return Ok(None);
         };
-        let name = read_path_buf(self.reader.by_ref(), metadata.name_len as usize, format)?;
-        if name.as_os_str().as_bytes() == TRAILER.to_bytes() {
+        let path = read_path_buf(self.reader.by_ref(), metadata.name_len as usize, format)?;
+        if path.as_os_str().as_bytes() == TRAILER.to_bytes() {
             return Ok(None);
         }
         let reader = if matches!(format, Format::Newc | Format::Crc) {
@@ -262,13 +271,14 @@ impl<R: Read> CpioArchive<R> {
         };
         Ok(Some(Entry {
             metadata,
-            name,
+            path,
             reader: EntryReader { inner: reader },
             format,
         }))
     }
 }
 
+/// A reader for a particular archive entry.
 pub struct EntryReader<'a, R: Read> {
     inner: InnerEntryReader<'a, R>,
 }
@@ -279,7 +289,8 @@ enum InnerEntryReader<'a, R: Read> {
 }
 
 impl<'a, R: Read> EntryReader<'a, R> {
-    pub fn get_ref(&mut self) -> &r {
+    /// Get immutable reference to the underyling reader.
+    pub fn get_ref(&mut self) -> &R {
         use InnerEntryReader::*;
         match self.inner {
             Stream(ref mut reader) => reader.get_ref(),
@@ -287,6 +298,7 @@ impl<'a, R: Read> EntryReader<'a, R> {
         }
     }
 
+    /// Get mutable reference to the underyling reader.
     pub fn get_mut(&mut self) -> &mut R {
         use InnerEntryReader::*;
         match self.inner {
@@ -295,22 +307,14 @@ impl<'a, R: Read> EntryReader<'a, R> {
         }
     }
 
+    /// Copy the remaining contents to the specified `sink`.
+    ///
+    /// Uses [`copy`](std::io::copy) for maximum efficiency.
     pub fn copy_to<W: Write>(&mut self, sink: &mut W) -> Result<u64, Error> {
         use InnerEntryReader::*;
         match self.inner {
             Stream(ref mut reader) => std::io::copy(reader, sink),
-            Slice(slice, ref mut _reader) => {
-                sink.write_all(slice)?;
-                Ok(slice.len() as u64)
-            }
-        }
-    }
-
-    pub fn is_hard_link(&self) -> bool {
-        use InnerEntryReader::*;
-        match self.inner {
-            Stream(..) => false,
-            Slice(..) => true,
+            Slice(ref mut slice, ref mut _reader) => std::io::copy(slice, sink),
         }
     }
 
@@ -377,10 +381,15 @@ impl<'a, R: Read> Read for EntryReader<'a, R> {
     }
 }
 
+/// CPIO archive entry.
 pub struct Entry<'a, R: Read> {
+    /// File's metadata.
     pub metadata: Metadata,
-    pub name: PathBuf,
+    /// File path in the archive.
+    pub path: PathBuf,
+    /// Entry reader.
     pub reader: EntryReader<'a, R>,
+    /// Entry format.
     pub format: Format,
 }
 
@@ -407,7 +416,7 @@ mod tests {
     use walkdir::WalkDir;
 
     use super::*;
-    use crate::CpioBuilder;
+    use crate::Builder;
 
     #[test]
     fn cpio_write_read() {
@@ -417,7 +426,7 @@ mod tests {
             let cpio_path = workdir.path().join("test.cpio");
             let mut expected_headers = Vec::new();
             let mut expected_files = Vec::new();
-            let mut builder = CpioBuilder::new(File::create(&cpio_path).unwrap());
+            let mut builder = Builder::new(File::create(&cpio_path).unwrap());
             for entry in WalkDir::new(directory.path()).into_iter() {
                 let entry = entry.unwrap();
                 let entry_path = entry
@@ -446,13 +455,13 @@ mod tests {
             }
             builder.finish().unwrap();
             let reader = File::open(&cpio_path).unwrap();
-            let mut archive = CpioArchive::new(reader);
+            let mut archive = Archive::new(reader);
             let mut actual_headers = Vec::new();
             let mut actual_files = Vec::new();
             while let Some(mut entry) = archive.read_entry().unwrap() {
                 let mut contents = Vec::new();
                 entry.reader.read_to_end(&mut contents).unwrap();
-                actual_headers.push((entry.name.clone(), entry.metadata.clone()));
+                actual_headers.push((entry.path.clone(), entry.metadata.clone()));
                 actual_files.push(contents);
             }
             assert_eq!(expected_headers, actual_headers);
@@ -461,7 +470,7 @@ mod tests {
             let unpack_dir = workdir.path().join("unpacked");
             remove_dir_all(&unpack_dir).ok();
             let reader = File::open(&cpio_path).unwrap();
-            let mut archive = CpioArchive::new(reader);
+            let mut archive = Archive::new(reader);
             archive.preserve_mtime(true);
             archive.unpack(&unpack_dir).unwrap();
             let files1 = list_dir_all(directory.path()).unwrap();
@@ -477,11 +486,11 @@ mod tests {
         arbtest(|u| {
             let directory: DirectoryOfFiles = u.arbitrary()?;
             let cpio_path = workdir.path().join("test.cpio");
-            CpioBuilder::pack(File::create(&cpio_path).unwrap(), directory.path()).unwrap();
+            Builder::pack(File::create(&cpio_path).unwrap(), directory.path()).unwrap();
             let unpack_dir = workdir.path().join("unpacked");
             remove_dir_all(&unpack_dir).ok();
             let reader = File::open(&cpio_path).unwrap();
-            let mut archive = CpioArchive::new(reader);
+            let mut archive = Archive::new(reader);
             archive.preserve_mtime(true);
             archive.unpack(&unpack_dir).unwrap();
             let files1 = list_dir_all(directory.path()).unwrap();

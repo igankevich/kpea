@@ -4,16 +4,24 @@ use std::io::Error;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[repr(u8)]
 pub enum FileType {
+    /// Unix-domain socket.
     Socket = 0o14,
+    /// Symbolic link.
     Symlink = 0o12,
+    /// Regular file.
     Regular = 0o10,
+    /// Block device.
     BlockDevice = 0o6,
+    /// Directory.
     Directory = 0o4,
+    /// Character device.
     CharDevice = 0o2,
+    /// Named pipe.
     Fifo = 0o1,
 }
 
 impl FileType {
+    /// Get file type from file mode.
     pub fn new(mode: u32) -> Result<Self, Error> {
         use FileType::*;
         const SOCKET: u8 = FileType::Socket as u8;

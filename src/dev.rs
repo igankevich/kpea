@@ -1,5 +1,5 @@
-//! The functions are from musl libc. Hopefully they are portable.
-//! https://git.musl-libc.org/cgit/musl/tree/include/sys/sysmacros.h
+//! Theses functions are from musl libc. Hopefully they are portable.
+//! See <https://git.musl-libc.org/cgit/musl/tree/include/sys/sysmacros.h> for more information.
 
 pub const fn major(dev: u64) -> u32 {
     ((dev >> 32) as u32 & 0xfffff000_u32) | ((dev >> 8) as u32 & 0x00000fff_u32)

@@ -151,27 +151,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "cpio"
-version = "0.1.0"
-dependencies = [
- "arbitrary",
- "arbtest",
- "cpio-test",
- "libc",
- "normalize-path",
- "similar-asserts",
- "tempfile",
- "walkdir",
-]
-
-[[package]]
 name = "cpio-cli"
 version = "0.1.0"
 dependencies = [
  "arbtest",
  "clap",
- "cpio",
  "cpio-test",
+ "kpea",
  "similar-asserts",
  "tempfile",
  "test_bin",
@@ -234,6 +220,21 @@ name = "is_terminal_polyfill"
 version = "1.70.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7943c866cc5cd64cbc25b2e01621d07fa8eb2a1a23160ee81ce38704e97b8ecf"
+
+[[package]]
+name = "kpea"
+version = "0.1.0"
+dependencies = [
+ "arbitrary",
+ "arbtest",
+ "cpio-test",
+ "kpea",
+ "libc",
+ "normalize-path",
+ "similar-asserts",
+ "tempfile",
+ "walkdir",
+]
 
 [[package]]
 name = "lazy_static"

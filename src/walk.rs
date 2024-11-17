@@ -6,6 +6,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
 
+#[derive(Default)]
 pub struct WalkerOptions {
     follow_symlinks: bool,
     cross_device: bool,
@@ -32,15 +33,6 @@ impl WalkerOptions {
         };
         walker.visit_dir(root)?;
         Ok(walker)
-    }
-}
-
-impl Default for WalkerOptions {
-    fn default() -> Self {
-        Self {
-            follow_symlinks: false,
-            cross_device: false,
-        }
     }
 }
 

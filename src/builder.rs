@@ -8,14 +8,14 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 
-
 use crate::constants::*;
 use crate::io::*;
 use crate::Format;
 use crate::Metadata;
 use crate::Walk;
 
-pub struct CpioBuilder<W: Write> {
+/// CPIO archive writer.
+pub struct Builder<W: Write> {
     writer: W,
     max_inode: u32,
     format: Format,
@@ -23,7 +23,8 @@ pub struct CpioBuilder<W: Write> {
     inodes: HashMap<u64, u32>,
 }
 
-impl<W: Write> CpioBuilder<W> {
+impl<W: Write> Builder<W> {
+    /// Create new CPIO archive writer using the underlying `writer`.
     pub fn new(writer: W) -> Self {
         Self {
             writer,
@@ -33,19 +34,21 @@ impl<W: Write> CpioBuilder<W> {
         }
     }
 
+    /// Set entries' format.
     pub fn set_format(&mut self, format: Format) {
         self.format = format;
     }
 
-    pub fn write_entry<P: AsRef<Path>, R: Read>(
+    /// Append raw entry.
+    pub fn append_entry<P: AsRef<Path>, R: Read>(
         &mut self,
         mut metadata: Metadata,
-        name: P,
+        inner_path: P,
         mut data: R,
     ) -> Result<Metadata, Error> {
-        self.fix_header(&mut metadata, name.as_ref())?;
+        self.fix_header(&mut metadata, inner_path.as_ref())?;
         metadata.write(self.writer.by_ref(), self.format)?;
-        write_path(self.writer.by_ref(), name.as_ref(), self.format)?;
+        write_path(self.writer.by_ref(), inner_path.as_ref(), self.format)?;
         if metadata.file_size != 0 {
             let n = std::io::copy(&mut data, self.writer.by_ref())?;
             if matches!(self.format, Format::Newc | Format::Crc) {
@@ -55,10 +58,11 @@ impl<W: Write> CpioBuilder<W> {
         Ok(metadata)
     }
 
+    /// Append file or directory specified by `path`.
     pub fn append_path<P1: AsRef<Path>, P2: AsRef<Path>>(
         &mut self,
         path: P1,
-        name: P2,
+        inner_path: P2,
     ) -> Result<(Metadata, std::fs::Metadata), Error> {
         let path = path.as_ref();
         let fs_metadata = path.symlink_metadata()?;
@@ -68,20 +72,20 @@ impl<W: Write> CpioBuilder<W> {
             let mut target = target.into_os_string().into_vec();
             target.push(0_u8);
             cpio_metadata.file_size = target.len() as u64;
-            self.write_entry(cpio_metadata, name, &target[..])?
+            self.append_entry(cpio_metadata, inner_path, &target[..])?
         } else if fs_metadata.is_file() {
-            self.write_entry(cpio_metadata, name, File::open(path)?)?
+            self.append_entry(cpio_metadata, inner_path, File::open(path)?)?
         } else {
             // directory, block/character device, socket, fifo
             cpio_metadata.file_size = 0;
-            self.write_entry(cpio_metadata, name, std::io::empty())?
+            self.append_entry(cpio_metadata, inner_path, std::io::empty())?
         };
         Ok((cpio_metadata, fs_metadata))
     }
 
-    pub fn pack<P: AsRef<Path>>(writer: W, directory: P) -> Result<W, Error> {
+    /// Append all files in the `directory` recursively.
+    pub fn append_dir_all<P: AsRef<Path>>(&mut self, directory: P) -> Result<(), Error> {
         let directory = directory.as_ref();
-        let mut builder = Self::new(writer);
         for entry in directory.walk()? {
             let entry = entry?;
             let outer_path = entry.path();
@@ -89,20 +93,31 @@ impl<W: Write> CpioBuilder<W> {
             if inner_path == Path::new("") {
                 continue;
             }
-            builder.append_path(&outer_path, inner_path)?;
+            self.append_path(&outer_path, inner_path)?;
         }
-        let writer = builder.finish()?;
-        Ok(writer)
+        Ok(())
     }
 
+    /// Create an archive from the files in the `directory`.
+    pub fn pack<P: AsRef<Path>>(writer: W, directory: P) -> Result<W, Error> {
+        let mut builder = Self::new(writer);
+        builder.append_dir_all(directory)?;
+        builder.finish()
+    }
+
+    /// Get mutable reference to the underyling writer.
     pub fn get_mut(&mut self) -> &mut W {
         self.writer.by_ref()
     }
 
-    pub fn get(&self) -> &W {
+    /// Get immutable reference to the underyling writer.
+    pub fn get_ref(&self) -> &W {
         &self.writer
     }
 
+    /// Finalize archive creation.
+    ///
+    /// This methods appends the so-called trailer entry to the archive.
     pub fn finish(mut self) -> Result<W, Error> {
         self.write_trailer()?;
         Ok(self.writer)

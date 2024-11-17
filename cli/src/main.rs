@@ -9,8 +9,8 @@ use std::process::ExitCode;
 use std::str::FromStr;
 
 use clap::Parser;
-use cpio::CpioArchive;
-use cpio::CpioBuilder;
+use cpio::Archive;
+use cpio::Builder;
 
 fn do_main() -> Result<ExitCode, Error> {
     let args = Args::parse();
@@ -30,7 +30,7 @@ fn do_main() -> Result<ExitCode, Error> {
 
 fn copy_out(args: Args) -> Result<(), Error> {
     let mut reader = BufReader::new(std::io::stdin());
-    let mut builder = CpioBuilder::new(std::io::stdout());
+    let mut builder = Builder::new(std::io::stdout());
     let format = match args.format {
         // crc is only supported for reading
         Format::Crc => Format::Newc,
@@ -60,16 +60,16 @@ fn copy_out(args: Args) -> Result<(), Error> {
 }
 
 fn copy_in(args: Args) -> Result<(), Error> {
-    let mut archive = CpioArchive::new(std::io::stdin());
+    let mut archive = Archive::new(std::io::stdin());
     archive.preserve_mtime(args.preserve_mtime);
     archive.unpack(Path::new("."))?;
     Ok(())
 }
 
 fn list_contents() -> Result<(), Error> {
-    let mut archive = CpioArchive::new(std::io::stdin());
+    let mut archive = Archive::new(std::io::stdin());
     while let Some(entry) = archive.read_entry()? {
-        println!("{}", entry.name.display());
+        println!("{}", entry.path.display());
     }
     Ok(())
 }
