@@ -28,7 +28,6 @@ pub fn write_path<W: Write, P: AsRef<Path>>(
     Ok(())
 }
 
-// TODO this should be CString to optimize file system related operations
 pub fn read_path_buf<R: Read>(mut reader: R, len: usize, format: Format) -> Result<PathBuf, Error> {
     let mut buf = vec![0_u8; len];
     reader.read_exact(&mut buf[..])?;

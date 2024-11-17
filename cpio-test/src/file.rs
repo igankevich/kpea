@@ -168,6 +168,9 @@ pub fn list_dir_all<P: AsRef<Path>>(dir: P) -> Result<Vec<FileInfo>, Error> {
     let mut files = Vec::new();
     for entry in WalkDir::new(dir).into_iter() {
         let entry = entry?;
+        if entry.path() == dir {
+            continue;
+        }
         let metadata = entry.path().symlink_metadata()?;
         let contents = if metadata.is_file() {
             std::fs::read(entry.path()).unwrap()

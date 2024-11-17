@@ -1,4 +1,3 @@
-// TODO deduplicate the code
 use std::ffi::CStr;
 use std::ffi::CString;
 use std::io::Error;

@@ -91,7 +91,6 @@ where
         similar_asserts::assert_eq!(files1, files2);
         Ok(())
     });
-    // .seed(0xd9e5fe7e000000bb); // TODO timing???
 }
 
 // A directory contains a hard link that points to a symlink.

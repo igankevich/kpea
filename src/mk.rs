@@ -47,6 +47,14 @@ pub fn set_file_modified_time(path: &CStr, t: SystemTime) -> Result<(), Error> {
     Ok(())
 }
 
+pub fn lchown(path: &CStr, uid: u32, gid: u32) -> Result<(), Error> {
+    let ret = unsafe { libc::lchown(path.as_ptr(), uid, gid) };
+    if ret < 0 {
+        return Err(Error::last_os_error());
+    }
+    Ok(())
+}
+
 pub fn path_to_c_string(path: PathBuf) -> Result<CString, Error> {
     Ok(CString::new(path.into_os_string().into_vec())?)
 }

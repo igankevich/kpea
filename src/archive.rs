@@ -25,6 +25,7 @@ use normalize_path::NormalizePath;
 
 use crate::constants::*;
 use crate::io::*;
+use crate::lchown;
 use crate::mkfifo;
 use crate::mknod;
 use crate::path_to_c_string;
@@ -39,6 +40,7 @@ pub struct CpioArchive<R: Read> {
     // Inode -> file contents mapping for files that have > 1 hard links.
     contents: HashMap<u64, Vec<u8>>,
     preserve_modification_time: bool,
+    preserve_owner: bool,
 }
 
 impl<R: Read> CpioArchive<R> {
@@ -47,11 +49,22 @@ impl<R: Read> CpioArchive<R> {
             reader,
             contents: Default::default(),
             preserve_modification_time: false,
+            preserve_owner: false,
         }
     }
 
+    /// Preserve file modification time.
+    ///
+    /// `false` by default.
     pub fn preserve_modification_time(&mut self, value: bool) {
         self.preserve_modification_time = value;
+    }
+
+    /// Preserve the user and group IDs associated with the files.
+    ///
+    /// `false` by default.
+    pub fn preserve_owner(&mut self, value: bool) {
+        self.preserve_owner = value;
     }
 
     pub fn iter(&mut self) -> Iter<R> {
@@ -79,6 +92,7 @@ impl<R: Read> CpioArchive<R> {
         // inode -> path
         let mut hard_links = HashMap::new();
         let preserve_modification_time = self.preserve_modification_time;
+        let preserve_owner = self.preserve_owner;
         for entry in self.iter() {
             let mut entry = entry?;
             let path = match entry.name.strip_prefix("/") {
@@ -109,7 +123,6 @@ impl<R: Read> CpioArchive<R> {
                 }
                 Occupied(o) => {
                     let (original, original_file_size) = o.get();
-                    eprintln!("hard link {:?} -> {:?}", path, original);
                     hard_link(original, &path)?;
                     if entry.metadata.file_type()? == FileType::Regular
                         && *original_file_size < entry.metadata.file_size
@@ -127,6 +140,13 @@ impl<R: Read> CpioArchive<R> {
                             }
                         }
                         drop(file);
+                        if preserve_owner {
+                            std::os::unix::fs::lchown(
+                                &path,
+                                Some(entry.metadata.uid),
+                                Some(entry.metadata.gid),
+                            )?;
+                        }
                         set_permissions(&path, Permissions::from_mode(old_mode))?;
                     }
                     continue;
@@ -136,11 +156,18 @@ impl<R: Read> CpioArchive<R> {
                 FileType::Regular => {
                     let mut file = File::create(&path)?;
                     let n = entry.reader.copy_to(&mut file)?;
-                    eprintln!("size {}", n);
+                    debug_assert!(n == entry.metadata.file_size);
                     if preserve_modification_time {
                         if let Ok(modified) = entry.metadata.modified() {
                             file.set_modified(modified)?;
                         }
+                    }
+                    if preserve_owner {
+                        std::os::unix::fs::lchown(
+                            &path,
+                            Some(entry.metadata.uid),
+                            Some(entry.metadata.gid),
+                        )?;
                     }
                     file.set_permissions(Permissions::from_mode(entry.metadata.file_mode()))?;
                 }
@@ -152,11 +179,17 @@ impl<R: Read> CpioArchive<R> {
                             File::open(&path)?.set_modified(modified)?;
                         }
                     }
+                    if preserve_owner {
+                        std::os::unix::fs::lchown(
+                            &path,
+                            Some(entry.metadata.uid),
+                            Some(entry.metadata.gid),
+                        )?;
+                    }
                     // apply proper permissions later when we have written all other files
                     dirs.push((path, entry.metadata.file_mode()));
                 }
                 FileType::Fifo => {
-                    eprintln!("mkfifo {:?}", path);
                     let path = path_to_c_string(path)?;
                     mkfifo(&path, entry.metadata.mode)?;
                     if preserve_modification_time {
@@ -164,14 +197,20 @@ impl<R: Read> CpioArchive<R> {
                             set_file_modified_time(&path, modified)?;
                         }
                     }
+                    if preserve_owner {
+                        lchown(&path, entry.metadata.uid, entry.metadata.gid)?;
+                    }
                 }
                 FileType::Socket => {
                     UnixDatagram::bind(&path)?;
+                    let path = path_to_c_string(path)?;
                     if preserve_modification_time {
                         if let Ok(modified) = entry.metadata.modified() {
-                            let path = path_to_c_string(path)?;
                             set_file_modified_time(&path, modified)?;
                         }
+                    }
+                    if preserve_owner {
+                        lchown(&path, entry.metadata.uid, entry.metadata.gid)?;
                     }
                 }
                 FileType::BlockDevice | FileType::CharDevice => {
@@ -182,6 +221,9 @@ impl<R: Read> CpioArchive<R> {
                             set_file_modified_time(&path, modified)?;
                         }
                     }
+                    if preserve_owner {
+                        lchown(&path, entry.metadata.uid, entry.metadata.gid)?;
+                    }
                 }
                 FileType::Symlink => {
                     let mut original = Vec::new();
@@ -191,9 +233,15 @@ impl<R: Read> CpioArchive<R> {
                     }
                     let original: PathBuf = OsString::from_vec(original).into();
                     symlink(original, &path)?;
+                    if preserve_owner {
+                        std::os::unix::fs::lchown(
+                            &path,
+                            Some(entry.metadata.uid),
+                            Some(entry.metadata.gid),
+                        )?;
+                    }
                 }
             }
-            eprintln!("unpacked");
         }
         dirs.sort_unstable_by(|a, b| b.0.cmp(&a.0));
         for (path, mode) in dirs.into_iter() {
@@ -213,10 +261,7 @@ impl<R: Read> CpioArchive<R> {
         }
         let reader = if matches!(format, Format::Newc | Format::Crc) {
             let file_type = metadata.file_type()?;
-            if metadata.file_size != 0
-                && metadata.nlink > 1
-                    && file_type != FileType::Directory
-            {
+            if metadata.file_size != 0 && metadata.nlink > 1 && file_type != FileType::Directory {
                 let mut contents = Vec::new();
                 std::io::copy(
                     &mut self.reader.by_ref().take(metadata.file_size),
@@ -277,8 +322,8 @@ impl<'a, R: Read> EntryReader<'a, R> {
                 // discard the remaining bytes
                 std::io::copy(reader, &mut std::io::sink())?;
             }
-            Self::Slice(..) => {
-                // TODO discard?
+            Self::Slice(ref mut x, ..) => {
+                *x = &[];
             }
         }
         let reader = self.get_mut();
