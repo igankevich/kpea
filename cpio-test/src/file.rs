@@ -23,9 +23,9 @@ use std::time::SystemTime;
 
 use arbitrary::Arbitrary;
 use arbitrary::Unstructured;
+use libc::makedev;
 use normalize_path::NormalizePath;
 use tempfile::TempDir;
-use libc::makedev;
 use walkdir::WalkDir;
 
 use crate::mkfifo;
@@ -120,7 +120,7 @@ impl<'a> Arbitrary<'a> for DirectoryOfFiles {
                     mknod(&path, mode, dev).unwrap();
                     set_file_modified_time(&path, t).unwrap();
                 }
-                CharacterDevice => {
+                CharDevice => {
                     // dev null
                     let dev = makedev(1, 3);
                     let mode = u.int_in_range(0o400..=0o777)?;
@@ -159,7 +159,7 @@ enum FileKind {
     Fifo,
     Socket,
     BlockDevice,
-    CharacterDevice,
+    CharDevice,
     Symlink,
     HardLink,
 }
