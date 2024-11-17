@@ -8,12 +8,12 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 
-use walkdir::WalkDir;
 
 use crate::constants::*;
 use crate::io::*;
 use crate::Format;
 use crate::Metadata;
+use crate::Walk;
 
 pub struct CpioBuilder<W: Write> {
     writer: W,
@@ -82,13 +82,14 @@ impl<W: Write> CpioBuilder<W> {
     pub fn pack<P: AsRef<Path>>(writer: W, directory: P) -> Result<W, Error> {
         let directory = directory.as_ref();
         let mut builder = Self::new(writer);
-        for entry in WalkDir::new(directory).into_iter() {
+        for entry in directory.walk()? {
             let entry = entry?;
-            let entry_path = entry.path().strip_prefix(directory).map_err(Error::other)?;
-            if entry_path == Path::new("") {
+            let outer_path = entry.path();
+            let inner_path = outer_path.strip_prefix(directory).map_err(Error::other)?;
+            if inner_path == Path::new("") {
                 continue;
             }
-            builder.append_path(entry.path(), entry_path)?;
+            builder.append_path(&outer_path, inner_path)?;
         }
         let writer = builder.finish()?;
         Ok(writer)

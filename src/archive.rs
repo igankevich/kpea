@@ -279,6 +279,14 @@ enum InnerEntryReader<'a, R: Read> {
 }
 
 impl<'a, R: Read> EntryReader<'a, R> {
+    pub fn get_ref(&mut self) -> &r {
+        use InnerEntryReader::*;
+        match self.inner {
+            Stream(ref mut reader) => reader.get_ref(),
+            Slice(_slice, ref reader) => reader,
+        }
+    }
+
     pub fn get_mut(&mut self) -> &mut R {
         use InnerEntryReader::*;
         match self.inner {
