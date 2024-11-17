@@ -26,7 +26,7 @@ cpio = { package = "kpea", version = "0.1.0" }
 ## Example
 
 
-```no_run
+```rust
 use kpea as cpio; // not needed if you added dependency as `cpio`
 use std::fs::File;
 use std::io::Error;
