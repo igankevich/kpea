@@ -3,7 +3,7 @@
 . ./ci/preamble.sh
 
 cargo_publish() {
-    cargo publish --quiet
+    cargo publish --quiet --package kpea
 }
 
 # TODO
