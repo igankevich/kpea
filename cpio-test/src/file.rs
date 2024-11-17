@@ -25,9 +25,9 @@ use arbitrary::Arbitrary;
 use arbitrary::Unstructured;
 use normalize_path::NormalizePath;
 use tempfile::TempDir;
+use libc::makedev;
 use walkdir::WalkDir;
 
-use crate::makedev;
 use crate::mkfifo;
 use crate::mknod;
 use crate::path_to_c_string;

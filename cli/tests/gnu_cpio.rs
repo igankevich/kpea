@@ -88,17 +88,7 @@ where
         assert!(status.success());
         let files1 = list_dir_all(directory.path()).unwrap();
         let files2 = list_dir_all(&unpack_dir).unwrap();
-        //Command::new("ls").arg("-l").arg(directory.path()).status().unwrap();
-        //Command::new("ls").arg("-l").arg(&unpack_dir).status().unwrap();
         similar_asserts::assert_eq!(files1, files2);
-        //similar_asserts::assert_eq!(
-        //    files1.iter().map(|x| &x.path).collect::<Vec<_>>(),
-        //    files2.iter().map(|x| &x.path).collect::<Vec<_>>()
-        //);
-        //similar_asserts::assert_eq!(
-        //    files1.iter().map(|x| &x.header).collect::<Vec<_>>(),
-        //    files2.iter().map(|x| &x.header).collect::<Vec<_>>()
-        //);
         Ok(())
     });
 }
