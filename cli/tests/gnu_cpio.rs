@@ -18,32 +18,59 @@ use tempfile::TempDir;
 use test_bin::get_test_bin;
 use walkdir::WalkDir;
 
+const OUR_FORMATS: [&str; 4] = ["newc", "odc", "bin-le", "bin-be"];
+const THEIR_FORMATS: [&str; 3] = ["newc", "odc", "bin"];
+
 #[test]
 #[cfg_attr(miri, ignore)]
 fn our_copy_out_their_copy_in() {
-    copy_out_copy_in(|| get_test_bin("cpio"), || Command::new("cpio"), false);
+    copy_out_copy_in(
+        || get_test_bin("cpio"),
+        || Command::new("cpio"),
+        false,
+        &OUR_FORMATS,
+    );
 }
 
 #[test]
 #[cfg_attr(miri, ignore)]
 fn their_copy_out_our_copy_in() {
-    copy_out_copy_in(|| Command::new("cpio"), || get_test_bin("cpio"), true);
+    copy_out_copy_in(
+        || Command::new("cpio"),
+        || get_test_bin("cpio"),
+        true,
+        &THEIR_FORMATS,
+    );
 }
 
 #[test]
 #[cfg_attr(miri, ignore)]
 fn our_copy_out_our_copy_in() {
-    copy_out_copy_in(|| get_test_bin("cpio"), || get_test_bin("cpio"), true);
+    copy_out_copy_in(
+        || get_test_bin("cpio"),
+        || get_test_bin("cpio"),
+        true,
+        &OUR_FORMATS,
+    );
 }
 
 #[test]
 #[cfg_attr(miri, ignore)]
 fn their_copy_out_their_copy_in() {
-    copy_out_copy_in(|| Command::new("cpio"), || Command::new("cpio"), false);
+    copy_out_copy_in(
+        || Command::new("cpio"),
+        || Command::new("cpio"),
+        false,
+        &THEIR_FORMATS,
+    );
 }
 
-fn copy_out_copy_in<F1, F2>(mut cpio1: F1, mut cpio2: F2, allow_hard_link_to_symlink: bool)
-where
+fn copy_out_copy_in<F1, F2>(
+    mut cpio1: F1,
+    mut cpio2: F2,
+    allow_hard_link_to_symlink: bool,
+    formats: &[&str],
+) where
     F1: FnMut() -> Command,
     F2: FnMut() -> Command,
 {
@@ -57,7 +84,7 @@ where
     cpio2.arg("-i");
     cpio2.arg("--preserve-modification-time");
     arbtest(|u| {
-        let format = u.choose(&["newc", "odc"]).unwrap();
+        let format = u.choose(formats).unwrap();
         let mut cpio1 = cpio1();
         cpio1.arg("--quiet");
         cpio1.arg("--null");

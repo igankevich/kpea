@@ -11,6 +11,7 @@ use std::str::FromStr;
 use clap::Parser;
 use cpio::Archive;
 use cpio::Builder;
+use cpio::ByteOrder;
 
 fn do_main() -> Result<ExitCode, Error> {
     let args = Args::parse();
@@ -90,6 +91,7 @@ enum Format {
     Newc,
     Crc,
     Odc,
+    Bin(ByteOrder),
 }
 
 impl FromStr for Format {
@@ -99,8 +101,11 @@ impl FromStr for Format {
             "odc" => Ok(Format::Odc),
             "newc" => Ok(Format::Newc),
             "crc" => Ok(Format::Crc),
+            "bin" => Ok(Format::Bin(ByteOrder::native())),
+            "bin-le" | "bin_le" => Ok(Format::Bin(ByteOrder::LittleEndian)),
+            "bin-be" | "bin_be" => Ok(Format::Bin(ByteOrder::BigEndian)),
             s => Err(Error::other(format!(
-                "unknown format `{}`, supported formats: odc, newc, crc",
+                "unknown format `{}`, supported formats: odc, newc, crc, bin, bin-le, bin-be",
                 s
             ))),
         }
@@ -113,6 +118,7 @@ impl From<Format> for cpio::Format {
             Format::Newc => cpio::Format::Newc,
             Format::Odc => cpio::Format::Odc,
             Format::Crc => cpio::Format::Crc,
+            Format::Bin(byte_order) => cpio::Format::Bin(byte_order),
         }
     }
 }

@@ -331,10 +331,7 @@ impl<'a, R: Read> EntryReader<'a, R> {
         }
         let reader = self.get_mut();
         // handle padding
-        if matches!(format, Format::Newc | Format::Crc) {
-            let n = metadata.file_size as usize;
-            read_padding(reader, n)?;
-        }
+        read_file_padding(reader, metadata.file_size as usize, format)?;
         Ok(())
     }
 }

@@ -2,12 +2,16 @@ use std::ffi::CStr;
 
 pub const NEWC_HEADER_LEN: usize = 6 + 13 * 8;
 pub const NEWC_ALIGN: usize = 4;
+pub const BIN_ALIGN: usize = 2;
 pub const PADDING: [u8; NEWC_ALIGN] = [0_u8; NEWC_ALIGN];
 pub const TRAILER: &CStr = c"TRAILER!!!";
 pub const MAGIC_LEN: usize = 6;
 pub const ODC_MAGIC: [u8; MAGIC_LEN] = *b"070707";
 pub const NEWC_MAGIC: [u8; MAGIC_LEN] = *b"070701";
 pub const NEWCRC_MAGIC: [u8; MAGIC_LEN] = *b"070702";
+pub const BIN_MAGIC_LEN: usize = 2;
+pub const BIN_LE_MAGIC: [u8; BIN_MAGIC_LEN] = 0o070707_u16.to_le_bytes();
+pub const BIN_BE_MAGIC: [u8; BIN_MAGIC_LEN] = 0o070707_u16.to_be_bytes();
 // Max. 6-character octal number.
 pub const MAX_6: u32 = 0o777_777_u32;
 // Max. 11-character octal number.

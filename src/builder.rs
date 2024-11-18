@@ -51,9 +51,7 @@ impl<W: Write> Builder<W> {
         write_path(self.writer.by_ref(), inner_path.as_ref(), self.format)?;
         if metadata.file_size != 0 {
             let n = std::io::copy(&mut data, self.writer.by_ref())?;
-            if matches!(self.format, Format::Newc | Format::Crc) {
-                write_padding(self.writer.by_ref(), n as usize)?;
-            }
+            write_file_padding(self.writer.by_ref(), n, self.format)?;
         }
         Ok(metadata)
     }
@@ -138,10 +136,7 @@ impl<W: Write> Builder<W> {
             file_size: 0,
         };
         metadata.write(self.writer.by_ref(), self.format)?;
-        write_c_str(self.writer.by_ref(), TRAILER)?;
-        if matches!(self.format, Format::Newc | Format::Crc) {
-            write_padding(self.writer.by_ref(), NEWC_HEADER_LEN + len)?;
-        }
+        write_path_c_str(self.writer.by_ref(), TRAILER, self.format)?;
         Ok(())
     }
 
@@ -165,6 +160,7 @@ impl<W: Write> Builder<W> {
         let max = match self.format {
             Format::Newc | Format::Crc => MAX_8,
             Format::Odc => MAX_6,
+            Format::Bin(..) => u16::MAX as u32,
         };
         // -1 due to null byte
         if name_len > max as usize - 1 {
