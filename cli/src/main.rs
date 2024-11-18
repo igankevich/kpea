@@ -57,8 +57,13 @@ fn copy_out(args: Args) -> Result<(), Error> {
 
 fn copy_in(args: Args) -> Result<(), Error> {
     let mut archive = Archive::new(std::io::stdin());
-    archive.preserve_mtime(args.preserve_mtime);
-    archive.unpack(Path::new("."))?;
+    if args.only_verify_crc {
+        archive.verify_crc(true);
+        while archive.read_entry()?.is_some() {}
+    } else {
+        archive.preserve_mtime(args.preserve_mtime);
+        archive.unpack(Path::new("."))?;
+    }
     Ok(())
 }
 
@@ -141,6 +146,9 @@ struct Args {
     /// Do not print informational messages.
     #[arg(short = 'q', long = "quiet")]
     quiet: bool,
+    /// Verify files' checksum without unpacking them.
+    #[arg(long = "only-verify-crc")]
+    only_verify_crc: bool,
     /// CPIO format.
     #[arg(
         value_enum,

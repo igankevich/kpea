@@ -1,6 +1,8 @@
 use std::io::Error;
 use std::io::ErrorKind;
 
+use crate::constants::*;
+
 /// File types supported by CPIO.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[repr(u8)]
@@ -32,7 +34,7 @@ impl FileType {
         const DIRECTORY: u8 = FileType::Directory as u8;
         const CHAR: u8 = FileType::CharDevice as u8;
         const FIFO: u8 = FileType::Fifo as u8;
-        match ((mode & FILE_TYPE_MASK) >> 12) as u8 {
+        match mode_to_file_type(mode) {
             SOCKET => Ok(Socket),
             SYMLINK => Ok(Symlink),
             REGULAR => Ok(Regular),
@@ -52,4 +54,6 @@ impl TryFrom<u32> for FileType {
     }
 }
 
-const FILE_TYPE_MASK: u32 = 0o170000;
+pub(crate) fn mode_to_file_type(mode: u32) -> u8 {
+    ((mode & FILE_TYPE_MASK) >> 12) as u8
+}

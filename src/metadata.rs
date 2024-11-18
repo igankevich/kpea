@@ -11,6 +11,7 @@ use crate::io::*;
 use crate::major;
 use crate::makedev;
 use crate::minor;
+use crate::mode_to_file_type;
 use crate::FileType;
 
 /// CPIO archive metadata.
@@ -29,6 +30,7 @@ pub struct Metadata {
     pub(crate) mtime: u64,
     pub(crate) name_len: u32,
     pub(crate) file_size: u64,
+    pub(crate) check: u32,
 }
 
 impl Metadata {
@@ -101,6 +103,48 @@ impl Metadata {
         self.file_size
     }
 
+    /// Is a directory?
+    #[inline]
+    pub fn is_dir(&self) -> bool {
+        mode_to_file_type(self.mode) == FileType::Directory as u8
+    }
+
+    /// Is a regular file?
+    #[inline]
+    pub fn is_file(&self) -> bool {
+        mode_to_file_type(self.mode) == FileType::Regular as u8
+    }
+
+    /// Is a symbolic link?
+    #[inline]
+    pub fn is_symlink(&self) -> bool {
+        mode_to_file_type(self.mode) == FileType::Symlink as u8
+    }
+
+    /// Is a block device?
+    #[inline]
+    pub fn is_block_device(&self) -> bool {
+        mode_to_file_type(self.mode) == FileType::BlockDevice as u8
+    }
+
+    /// Is a character device?
+    #[inline]
+    pub fn is_char_device(&self) -> bool {
+        mode_to_file_type(self.mode) == FileType::CharDevice as u8
+    }
+
+    /// Is a named pipe?
+    #[inline]
+    pub fn is_fifo(&self) -> bool {
+        mode_to_file_type(self.mode) == FileType::Fifo as u8
+    }
+
+    /// Is a socket?
+    #[inline]
+    pub fn is_socket(&self) -> bool {
+        mode_to_file_type(self.mode) == FileType::Socket as u8
+    }
+
     /// Containing device ID + inode.
     pub(crate) fn id(&self) -> MetadataId {
         (self.dev, self.ino)
@@ -152,7 +196,8 @@ impl Metadata {
         match format {
             Format::Bin(byte_order) => self.write_bin(writer, byte_order),
             Format::Odc => self.write_odc(writer),
-            Format::Newc | Format::Crc => self.write_newc(writer),
+            Format::Newc => self.write_newc(writer, &NEWC_MAGIC[..]),
+            Format::Crc => self.write_newc(writer, &CRC_MAGIC[..]),
         }
     }
 
@@ -204,6 +249,7 @@ impl Metadata {
             mtime: mtime as u64,
             name_len: name_len as u32,
             file_size: file_size as u64,
+            check: 0,
         })
     }
 
@@ -292,6 +338,7 @@ impl Metadata {
             mtime,
             name_len,
             file_size,
+            check: 0,
         })
     }
 
@@ -332,8 +379,7 @@ impl Metadata {
         let rdev_major = read_hex_8(reader.by_ref())?;
         let rdev_minor = read_hex_8(reader.by_ref())?;
         let name_len = read_hex_8(reader.by_ref())?;
-        let _check = read_hex_8(reader.by_ref())?;
-        //eprintln!("check {}", _check);
+        let check = read_hex_8(reader.by_ref())?;
         Ok(Self {
             dev: makedev(dev_major, dev_minor),
             ino: ino as u64,
@@ -345,11 +391,12 @@ impl Metadata {
             mtime: mtime as u64,
             name_len,
             file_size: file_size as u64,
+            check,
         })
     }
 
-    fn write_newc<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        writer.write_all(&NEWC_MAGIC[..])?;
+    fn write_newc<W: Write>(&self, mut writer: W, magic: &[u8]) -> Result<(), Error> {
+        writer.write_all(magic)?;
         write_hex_8(
             writer.by_ref(),
             self.ino.try_into().map_err(|_| ErrorKind::InvalidData)?,
@@ -373,8 +420,7 @@ impl Metadata {
         write_hex_8(writer.by_ref(), major(self.rdev))?;
         write_hex_8(writer.by_ref(), minor(self.rdev))?;
         write_hex_8(writer.by_ref(), self.name_len)?;
-        // check
-        write_hex_8(writer.by_ref(), 0)?;
+        write_hex_8(writer.by_ref(), self.check)?;
         Ok(())
     }
 }
@@ -393,6 +439,7 @@ impl TryFrom<&std::fs::Metadata> for Metadata {
             mtime: other.mtime() as u64,
             name_len: 0,
             file_size: other.size(),
+            check: 0,
         })
     }
 }
@@ -490,6 +537,7 @@ mod tests {
                 mtime: u.int_in_range(0..=u16::MAX)? as u64,
                 name_len: u.int_in_range(0..=u16::MAX)? as u32,
                 file_size: u.int_in_range(0..=u16::MAX)? as u64,
+                check: 0,
             }))
         }
     }
@@ -524,6 +572,7 @@ mod tests {
                 mtime: u.int_in_range(0..=MAX_11)?,
                 name_len: u.int_in_range(0..=MAX_6)?,
                 file_size: u.int_in_range(0..=MAX_11)?,
+                check: 0,
             }))
         }
     }
@@ -558,6 +607,7 @@ mod tests {
                 mtime: u.int_in_range(0..=MAX_8 as u64)?,
                 name_len: u.int_in_range(0..=MAX_8)?,
                 file_size: u.int_in_range(0..=MAX_8 as u64)?,
+                check: u.int_in_range(0..=MAX_8)?,
             }))
         }
     }

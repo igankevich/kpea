@@ -26,3 +26,5 @@ pub const FILE_READ_BIT: u32 = 0o4;
 pub const FILE_WRITE_BIT: u32 = 0o2;
 #[allow(unused)]
 pub const FILE_EXEC_BIT: u32 = 0o1;
+
+pub const FILE_TYPE_MASK: u32 = 0o170000;
