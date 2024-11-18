@@ -101,6 +101,11 @@ impl Metadata {
         self.file_size
     }
 
+    /// Containing device ID + inode.
+    pub(crate) fn id(&self) -> MetadataId {
+        (self.dev, self.ino)
+    }
+
     pub(crate) fn read_some<R: Read>(mut reader: R) -> Result<Option<(Self, Format)>, Error> {
         let format = {
             // read 2 bytes
@@ -109,16 +114,6 @@ impl Metadata {
             if nread != BIN_MAGIC_LEN {
                 return Ok(None);
             }
-            eprintln!(
-                "magic1 {:#o} {:#o}",
-                u16::from_le_bytes([magic[0], magic[1]]),
-                u16::from_le_bytes(BIN_LE_MAGIC),
-            );
-            //eprintln!(
-            //    "magic2 {:#o} {:#o}",
-            //    u16::from_be_bytes([magic[0], magic[1]]),
-            //    u16::from_be_bytes(BIN_BE_MAGIC),
-            //);
             if magic[..BIN_MAGIC_LEN] == BIN_LE_MAGIC {
                 Format::Bin(ByteOrder::LittleEndian)
             } else if magic[..BIN_MAGIC_LEN] == BIN_BE_MAGIC {
@@ -129,12 +124,11 @@ impl Metadata {
                 if nread != MAGIC_LEN - BIN_MAGIC_LEN {
                     return Ok(None);
                 }
-                eprintln!("magic {:?}", String::from_utf8_lossy(&magic[..]));
                 if magic == ODC_MAGIC {
                     Format::Odc
                 } else if magic == NEWC_MAGIC {
                     Format::Newc
-                } else if magic == NEWCRC_MAGIC {
+                } else if magic == CRC_MAGIC {
                     Format::Crc
                 } else {
                     return Err(Error::other("not a cpio file"));
@@ -214,12 +208,16 @@ impl Metadata {
     }
 
     fn write_bin<W: Write>(&self, mut writer: W, byte_order: ByteOrder) -> Result<(), Error> {
+        fn dev64_to_dev16(dev: u64) -> Result<u16, Error> {
+            let major: u8 = major(dev).try_into().map_err(|_| ErrorKind::InvalidData)?;
+            let minor: u8 = minor(dev).try_into().map_err(|_| ErrorKind::InvalidData)?;
+            let dev = ((major as u16) << 8) | (minor as u16);
+            Ok(dev)
+        }
+
         macro_rules! do_write_bin {
             ($write16:ident, $write32:ident) => {
-                $write16(
-                    writer.by_ref(),
-                    self.dev.try_into().map_err(|_| ErrorKind::InvalidData)?,
-                )?;
+                $write16(writer.by_ref(), dev64_to_dev16(self.dev)?)?;
                 $write16(
                     writer.by_ref(),
                     self.ino.try_into().map_err(|_| ErrorKind::InvalidData)?,
@@ -240,17 +238,7 @@ impl Metadata {
                     writer.by_ref(),
                     self.nlink.try_into().map_err(|_| ErrorKind::InvalidData)?,
                 )?;
-                let major: u8 = major(self.rdev)
-                    .try_into()
-                    .map_err(|_| ErrorKind::InvalidData)?;
-                let minor: u8 = minor(self.rdev)
-                    .try_into()
-                    .map_err(|_| ErrorKind::InvalidData)?;
-                let rdev = ((major as u16) << 8) | (minor as u16);
-                $write16(
-                    writer.by_ref(),
-                    rdev.try_into().map_err(|_| ErrorKind::InvalidData)?,
-                )?;
+                $write16(writer.by_ref(), dev64_to_dev16(self.rdev)?)?;
                 $write32(
                     writer.by_ref(),
                     self.mtime.try_into().map_err(|_| ErrorKind::InvalidData)?,
@@ -345,6 +333,7 @@ impl Metadata {
         let rdev_minor = read_hex_8(reader.by_ref())?;
         let name_len = read_hex_8(reader.by_ref())?;
         let _check = read_hex_8(reader.by_ref())?;
+        //eprintln!("check {}", _check);
         Ok(Self {
             dev: makedev(dev_major, dev_minor),
             ino: ino as u64,
@@ -407,6 +396,8 @@ impl TryFrom<&std::fs::Metadata> for Metadata {
         })
     }
 }
+
+pub(crate) type MetadataId = (u64, u64);
 
 /// CPIO archive format.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

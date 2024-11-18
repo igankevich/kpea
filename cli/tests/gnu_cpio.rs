@@ -18,8 +18,8 @@ use tempfile::TempDir;
 use test_bin::get_test_bin;
 use walkdir::WalkDir;
 
-const OUR_FORMATS: [&str; 4] = ["newc", "odc", "bin-le", "bin-be"];
-const THEIR_FORMATS: [&str; 3] = ["newc", "odc", "bin"];
+const OUR_FORMATS: [&str; 5] = ["newc", "crc", "odc", "bin-le", "bin-be"];
+const THEIR_FORMATS: [&str; 4] = ["newc", "crc", "odc", "bin"];
 
 #[test]
 #[cfg_attr(miri, ignore)]

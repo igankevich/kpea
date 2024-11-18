@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs::read_link;
 use std::fs::File;
 use std::io::Error;
+use std::io::ErrorKind;
 use std::io::Read;
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
@@ -12,15 +13,19 @@ use crate::constants::*;
 use crate::io::*;
 use crate::Format;
 use crate::Metadata;
+use crate::MetadataId;
 use crate::Walk;
 
 /// CPIO archive writer.
 pub struct Builder<W: Write> {
     writer: W,
     max_inode: u32,
+    max_dev: u16,
     format: Format,
-    // Inodes mapping.
-    inodes: HashMap<u64, u32>,
+    // (dev, inode) -> inode mapping.
+    inodes: HashMap<MetadataId, u32>,
+    // Long device ID -> short device ID.
+    devices: HashMap<u64, u16>,
 }
 
 impl<W: Write> Builder<W> {
@@ -29,8 +34,10 @@ impl<W: Write> Builder<W> {
         Self {
             writer,
             max_inode: 0,
+            max_dev: 0,
             format: Format::Newc,
             inodes: Default::default(),
+            devices: Default::default(),
         }
     }
 
@@ -141,21 +148,8 @@ impl<W: Write> Builder<W> {
     }
 
     fn fix_header(&mut self, metadata: &mut Metadata, name: &Path) -> Result<(), Error> {
-        use std::collections::hash_map::Entry::*;
-        let inode = match self.inodes.entry(metadata.ino) {
-            Vacant(v) => {
-                let inode = self.max_inode;
-                self.max_inode += 1;
-                v.insert(inode);
-                inode
-            }
-            Occupied(o) => {
-                if matches!(self.format, Format::Newc | Format::Crc) {
-                    metadata.file_size = 0;
-                }
-                *o.get()
-            }
-        };
+        self.remap_device_id(metadata);
+        let inode = self.remap_inode(metadata);
         let name_len = name.as_os_str().as_bytes().len();
         let max = match self.format {
             Format::Newc | Format::Crc => MAX_8,
@@ -164,11 +158,53 @@ impl<W: Write> Builder<W> {
         };
         // -1 due to null byte
         if name_len > max as usize - 1 {
-            return Err(Error::other("file name is too long"));
+            return Err(ErrorKind::InvalidData.into());
         }
         // +1 due to null byte
         metadata.name_len = (name_len + 1) as u32;
         metadata.ino = inode as u64;
         Ok(())
+    }
+
+    /// Remap device id if needed.
+    fn remap_device_id(&mut self, metadata: &mut Metadata) {
+        use std::collections::hash_map::Entry::*;
+        match self.format {
+            Format::Odc | Format::Bin(..) => {
+                let dev = match self.devices.entry(metadata.dev) {
+                    Vacant(v) => {
+                        let dev = self.max_dev;
+                        self.max_dev += 1;
+                        v.insert(dev);
+                        dev
+                    }
+                    Occupied(o) => *o.get(),
+                };
+                metadata.dev = dev as u64;
+            }
+            Format::Newc | Format::Crc => {
+                // not needed, device is stored as two u32 numbers
+            }
+        };
+    }
+
+    /// Always remap inode.
+    fn remap_inode(&mut self, metadata: &mut Metadata) -> u32 {
+        use std::collections::hash_map::Entry::*;
+        match self.inodes.entry(metadata.id()) {
+            Vacant(v) => {
+                let inode = self.max_inode;
+                self.max_inode += 1;
+                v.insert(inode);
+                inode
+            }
+            Occupied(o) => {
+                if matches!(self.format, Format::Newc | Format::Crc) {
+                    // the data is only stored for the first hard link
+                    metadata.file_size = 0;
+                }
+                *o.get()
+            }
+        }
     }
 }

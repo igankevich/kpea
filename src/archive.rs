@@ -32,13 +32,14 @@ use crate::set_file_modified_time;
 use crate::FileType;
 use crate::Format;
 use crate::Metadata;
+use crate::MetadataId;
 
 /// CPIO archive reader.
 pub struct Archive<R: Read> {
     // TODO optimize inodes for Read + Seek
     reader: R,
     // Inode -> file contents mapping for files that have > 1 hard links.
-    contents: HashMap<u64, Vec<u8>>,
+    contents: HashMap<MetadataId, Vec<u8>>,
     preserve_mtime: bool,
     preserve_owner: bool,
 }
@@ -259,9 +260,9 @@ impl<R: Read> Archive<R> {
                     &mut self.reader.by_ref().take(metadata.file_size),
                     &mut contents,
                 )?;
-                self.contents.insert(metadata.ino, contents);
+                self.contents.insert(metadata.id(), contents);
             }
-            let contents = self.contents.get(&metadata.ino).map(|x| x.as_slice());
+            let contents = self.contents.get(&metadata.id()).map(|x| x.as_slice());
             match contents {
                 Some(slice) => InnerEntryReader::Slice(slice, self.reader.by_ref()),
                 None => InnerEntryReader::Stream(self.reader.by_ref().take(metadata.file_size)),

@@ -1,4 +1,5 @@
 use std::io::Error;
+use std::io::ErrorKind;
 
 /// File types supported by CPIO.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -39,7 +40,7 @@ impl FileType {
             DIRECTORY => Ok(Directory),
             CHAR => Ok(CharDevice),
             FIFO => Ok(Fifo),
-            _ => Err(Error::other("unknown file type")),
+            _ => Err(ErrorKind::InvalidData.into()),
         }
     }
 }

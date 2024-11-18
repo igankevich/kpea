@@ -1,6 +1,7 @@
 use std::ffi::CStr;
 use std::ffi::OsStr;
 use std::io::Error;
+use std::io::ErrorKind;
 use std::io::Read;
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
@@ -27,7 +28,7 @@ pub fn write_path<W: Write, P: AsRef<Path>>(
 pub fn read_path_buf<R: Read>(mut reader: R, len: usize, format: Format) -> Result<PathBuf, Error> {
     let mut buf = vec![0_u8; len];
     reader.read_exact(&mut buf[..])?;
-    let c_str = CStr::from_bytes_with_nul(&buf).map_err(|_| Error::other("invalid c string"))?;
+    let c_str = CStr::from_bytes_with_nul(&buf).map_err(|_| ErrorKind::InvalidData)?;
     read_path_padding(reader, len, format)?;
     let os_str = OsStr::from_bytes(c_str.to_bytes());
     Ok(os_str.into())
@@ -123,13 +124,14 @@ pub fn write_padding_bin<W: Write>(mut writer: W, len: usize) -> Result<(), Erro
 pub fn read_octal_6<R: Read>(mut reader: R) -> Result<u32, Error> {
     let mut buf = [0_u8; 6];
     reader.read_exact(&mut buf[..])?;
-    let s = from_utf8(&buf[..]).map_err(|_| Error::other("invalid octal number"))?;
-    u32::from_str_radix(s, 8).map_err(|_| Error::other("invalid octal number"))
+    let s = from_utf8(&buf[..]).map_err(|_| ErrorKind::InvalidData)?;
+    let n = u32::from_str_radix(s, 8).map_err(|_| ErrorKind::InvalidData)?;
+    Ok(n)
 }
 
 pub fn write_octal_6<W: Write>(mut writer: W, value: u32) -> Result<(), Error> {
     if value > MAX_6 {
-        return Err(Error::other("6-character octal value is too large"));
+        return Err(ErrorKind::InvalidData.into());
     }
     let s = format!("{:06o}", value);
     writer.write_all(s.as_bytes())
@@ -138,8 +140,9 @@ pub fn write_octal_6<W: Write>(mut writer: W, value: u32) -> Result<(), Error> {
 pub fn read_hex_8<R: Read>(mut reader: R) -> Result<u32, Error> {
     let mut buf = [0_u8; 8];
     reader.read_exact(&mut buf[..])?;
-    let s = from_utf8(&buf[..]).map_err(|_| Error::other("invalid hexadecimal number"))?;
-    u32::from_str_radix(s, 16).map_err(|_| Error::other("invalid hexadecimal number"))
+    let s = from_utf8(&buf[..]).map_err(|_| ErrorKind::InvalidData)?;
+    let n = u32::from_str_radix(s, 16).map_err(|_| ErrorKind::InvalidData)?;
+    Ok(n)
 }
 
 pub fn write_hex_8<W: Write>(mut writer: W, value: u32) -> Result<(), Error> {
@@ -150,13 +153,14 @@ pub fn write_hex_8<W: Write>(mut writer: W, value: u32) -> Result<(), Error> {
 pub fn read_octal_11<R: Read>(mut reader: R) -> Result<u64, Error> {
     let mut buf = [0_u8; 11];
     reader.read_exact(&mut buf[..])?;
-    let s = from_utf8(&buf[..]).map_err(|_| Error::other("invalid octal number"))?;
-    u64::from_str_radix(s, 8).map_err(|_| Error::other("invalid octal number"))
+    let s = from_utf8(&buf[..]).map_err(|_| ErrorKind::InvalidData)?;
+    let n = u64::from_str_radix(s, 8).map_err(|_| ErrorKind::InvalidData)?;
+    Ok(n)
 }
 
 pub fn write_octal_11<W: Write>(mut writer: W, value: u64) -> Result<(), Error> {
     if value > MAX_11 {
-        return Err(Error::other("11-character octal value is too large"));
+        return Err(ErrorKind::InvalidData.into());
     }
     let s = format!("{:011o}", value);
     writer.write_all(s.as_bytes())

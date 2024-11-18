@@ -32,12 +32,7 @@ fn do_main() -> Result<ExitCode, Error> {
 fn copy_out(args: Args) -> Result<(), Error> {
     let mut reader = BufReader::new(std::io::stdin());
     let mut builder = Builder::new(std::io::stdout());
-    let format = match args.format {
-        // crc is only supported for reading
-        Format::Crc => Format::Newc,
-        other => other,
-    };
-    builder.set_format(format.into());
+    builder.set_format(args.format.into());
     let delimiter = if args.null_terminated { 0_u8 } else { b'\n' };
     loop {
         let mut line = Vec::new();
