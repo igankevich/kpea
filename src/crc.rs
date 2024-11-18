@@ -12,14 +12,6 @@ impl<W: Write> CrcWriter<W> {
         Self { writer, sum: 0 }
     }
 
-    pub fn get_mut(&mut self) -> &mut W {
-        self.writer.by_ref()
-    }
-
-    pub fn get_ref(&self) -> &W {
-        &self.writer
-    }
-
     pub fn into_inner(self) -> W {
         self.writer
     }
