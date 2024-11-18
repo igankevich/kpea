@@ -11,6 +11,7 @@ use crate::io::*;
 use crate::major;
 use crate::makedev;
 use crate::minor;
+use crate::mode_to_file_type;
 use crate::FileType;
 
 /// CPIO archive metadata.
@@ -29,6 +30,7 @@ pub struct Metadata {
     pub(crate) mtime: u64,
     pub(crate) name_len: u32,
     pub(crate) file_size: u64,
+    pub(crate) check: u32,
 }
 
 impl Metadata {
@@ -101,44 +103,217 @@ impl Metadata {
         self.file_size
     }
 
+    /// Is a directory?
+    #[inline]
+    pub fn is_dir(&self) -> bool {
+        mode_to_file_type(self.mode) == FileType::Directory as u8
+    }
+
+    /// Is a regular file?
+    #[inline]
+    pub fn is_file(&self) -> bool {
+        mode_to_file_type(self.mode) == FileType::Regular as u8
+    }
+
+    /// Is a symbolic link?
+    #[inline]
+    pub fn is_symlink(&self) -> bool {
+        mode_to_file_type(self.mode) == FileType::Symlink as u8
+    }
+
+    /// Is a block device?
+    #[inline]
+    pub fn is_block_device(&self) -> bool {
+        mode_to_file_type(self.mode) == FileType::BlockDevice as u8
+    }
+
+    /// Is a character device?
+    #[inline]
+    pub fn is_char_device(&self) -> bool {
+        mode_to_file_type(self.mode) == FileType::CharDevice as u8
+    }
+
+    /// Is a named pipe?
+    #[inline]
+    pub fn is_fifo(&self) -> bool {
+        mode_to_file_type(self.mode) == FileType::Fifo as u8
+    }
+
+    /// Is a socket?
+    #[inline]
+    pub fn is_socket(&self) -> bool {
+        mode_to_file_type(self.mode) == FileType::Socket as u8
+    }
+
+    /// Containing device ID + inode.
+    pub(crate) fn id(&self) -> MetadataId {
+        (self.dev, self.ino)
+    }
+
     pub(crate) fn read_some<R: Read>(mut reader: R) -> Result<Option<(Self, Format)>, Error> {
-        let mut magic = [0_u8; MAGIC_LEN];
-        let nread = reader.read(&mut magic[..])?;
-        if nread != MAGIC_LEN {
-            return Ok(None);
-        }
-        let (metadata, format) = Self::do_read(reader, magic)?;
+        let format = {
+            // read 2 bytes
+            let mut magic = [0_u8; MAGIC_LEN];
+            let nread = reader.read(&mut magic[..BIN_MAGIC_LEN])?;
+            if nread != BIN_MAGIC_LEN {
+                return Ok(None);
+            }
+            if magic[..BIN_MAGIC_LEN] == BIN_LE_MAGIC {
+                Format::Bin(ByteOrder::LittleEndian)
+            } else if magic[..BIN_MAGIC_LEN] == BIN_BE_MAGIC {
+                Format::Bin(ByteOrder::BigEndian)
+            } else {
+                // read 4 bytes more
+                let nread = reader.read(&mut magic[BIN_MAGIC_LEN..])?;
+                if nread != MAGIC_LEN - BIN_MAGIC_LEN {
+                    return Ok(None);
+                }
+                if magic == ODC_MAGIC {
+                    Format::Odc
+                } else if magic == NEWC_MAGIC {
+                    Format::Newc
+                } else if magic == CRC_MAGIC {
+                    Format::Crc
+                } else {
+                    return Err(Error::other("not a cpio file"));
+                }
+            }
+        };
+        let (metadata, format) = Self::do_read(reader, format)?;
         Ok(Some((metadata, format)))
     }
 
-    #[allow(unused)]
-    fn read<R: Read>(mut reader: R) -> Result<(Self, Format), Error> {
-        let mut magic = [0_u8; MAGIC_LEN];
-        reader.read_exact(&mut magic[..])?;
-        Self::do_read(reader, magic)
-    }
-
-    fn do_read<R: Read>(reader: R, magic: [u8; MAGIC_LEN]) -> Result<(Self, Format), Error> {
-        let format = if magic == ODC_MAGIC {
-            Format::Odc
-        } else if magic == NEWC_MAGIC {
-            Format::Newc
-        } else if magic == NEWCRC_MAGIC {
-            Format::Crc
-        } else {
-            return Err(Error::other("not a cpio file"));
-        };
+    fn do_read<R: Read>(reader: R, format: Format) -> Result<(Self, Format), Error> {
         match format {
-            Format::Odc => Ok((Self::read_odc(reader)?, format)),
-            Format::Newc | Format::Crc => Ok((Self::read_newc(reader)?, format)),
+            Format::Bin(byte_order) => Self::read_bin(reader, byte_order),
+            Format::Odc => Self::read_odc(reader),
+            Format::Newc | Format::Crc => Self::read_newc(reader),
         }
+        .map(|metadata| (metadata, format))
     }
 
     pub(crate) fn write<W: Write>(&self, writer: W, format: Format) -> Result<(), Error> {
         match format {
+            Format::Bin(byte_order) => self.write_bin(writer, byte_order),
             Format::Odc => self.write_odc(writer),
-            Format::Newc | Format::Crc => self.write_newc(writer),
+            Format::Newc => self.write_newc(writer, &NEWC_MAGIC[..]),
+            Format::Crc => self.write_newc(writer, &CRC_MAGIC[..]),
         }
+    }
+
+    fn read_bin<R: Read>(mut reader: R, byte_order: ByteOrder) -> Result<Self, Error> {
+        let dev;
+        let ino;
+        let mode;
+        let uid;
+        let gid;
+        let nlink;
+        let majmin;
+        let mtime;
+        let name_len;
+        let file_size;
+        match byte_order {
+            ByteOrder::LittleEndian => {
+                dev = read_binary_u16_le(reader.by_ref())?;
+                ino = read_binary_u16_le(reader.by_ref())?;
+                mode = read_binary_u16_le(reader.by_ref())?;
+                uid = read_binary_u16_le(reader.by_ref())?;
+                gid = read_binary_u16_le(reader.by_ref())?;
+                nlink = read_binary_u16_le(reader.by_ref())?;
+                majmin = read_binary_u16_le(reader.by_ref())?;
+                mtime = read_binary_u32_le(reader.by_ref())?;
+                name_len = read_binary_u16_le(reader.by_ref())?;
+                file_size = read_binary_u32_le(reader.by_ref())?;
+            }
+            ByteOrder::BigEndian => {
+                dev = read_binary_u16_be(reader.by_ref())?;
+                ino = read_binary_u16_be(reader.by_ref())?;
+                mode = read_binary_u16_be(reader.by_ref())?;
+                uid = read_binary_u16_be(reader.by_ref())?;
+                gid = read_binary_u16_be(reader.by_ref())?;
+                nlink = read_binary_u16_be(reader.by_ref())?;
+                majmin = read_binary_u16_be(reader.by_ref())?;
+                mtime = read_binary_u32_be(reader.by_ref())?;
+                name_len = read_binary_u16_be(reader.by_ref())?;
+                file_size = read_binary_u32_be(reader.by_ref())?;
+            }
+        }
+        Ok(Self {
+            dev: dev as u64,
+            ino: ino as u64,
+            mode: mode as u32,
+            uid: uid as u32,
+            gid: gid as u32,
+            nlink: nlink as u32,
+            rdev: makedev(((majmin >> 8) & 0xff) as u32, (majmin & 0xff) as u32),
+            mtime: mtime as u64,
+            name_len: name_len as u32,
+            file_size: file_size as u64,
+            check: 0,
+        })
+    }
+
+    fn write_bin<W: Write>(&self, mut writer: W, byte_order: ByteOrder) -> Result<(), Error> {
+        fn dev64_to_dev16(dev: u64) -> Result<u16, Error> {
+            let major: u8 = major(dev).try_into().map_err(|_| ErrorKind::InvalidData)?;
+            let minor: u8 = minor(dev).try_into().map_err(|_| ErrorKind::InvalidData)?;
+            let dev = ((major as u16) << 8) | (minor as u16);
+            Ok(dev)
+        }
+
+        macro_rules! do_write_bin {
+            ($write16:ident, $write32:ident) => {
+                $write16(writer.by_ref(), dev64_to_dev16(self.dev)?)?;
+                $write16(
+                    writer.by_ref(),
+                    self.ino.try_into().map_err(|_| ErrorKind::InvalidData)?,
+                )?;
+                $write16(
+                    writer.by_ref(),
+                    self.mode.try_into().map_err(|_| ErrorKind::InvalidData)?,
+                )?;
+                $write16(
+                    writer.by_ref(),
+                    self.uid.try_into().map_err(|_| ErrorKind::InvalidData)?,
+                )?;
+                $write16(
+                    writer.by_ref(),
+                    self.gid.try_into().map_err(|_| ErrorKind::InvalidData)?,
+                )?;
+                $write16(
+                    writer.by_ref(),
+                    self.nlink.try_into().map_err(|_| ErrorKind::InvalidData)?,
+                )?;
+                $write16(writer.by_ref(), dev64_to_dev16(self.rdev)?)?;
+                $write32(
+                    writer.by_ref(),
+                    self.mtime.try_into().map_err(|_| ErrorKind::InvalidData)?,
+                )?;
+                $write16(
+                    writer.by_ref(),
+                    self.name_len
+                        .try_into()
+                        .map_err(|_| ErrorKind::InvalidData)?,
+                )?;
+                $write32(
+                    writer.by_ref(),
+                    self.file_size
+                        .try_into()
+                        .map_err(|_| ErrorKind::InvalidData)?,
+                )?;
+            };
+        }
+        match byte_order {
+            ByteOrder::LittleEndian => {
+                writer.write_all(&BIN_LE_MAGIC[..])?;
+                do_write_bin!(write_binary_u16_le, write_binary_u32_le);
+            }
+            ByteOrder::BigEndian => {
+                writer.write_all(&BIN_BE_MAGIC[..])?;
+                do_write_bin!(write_binary_u16_be, write_binary_u32_be);
+            }
+        }
+        Ok(())
     }
 
     fn read_odc<R: Read>(mut reader: R) -> Result<Self, Error> {
@@ -163,6 +338,7 @@ impl Metadata {
             mtime,
             name_len,
             file_size,
+            check: 0,
         })
     }
 
@@ -170,15 +346,11 @@ impl Metadata {
         writer.write_all(&ODC_MAGIC[..])?;
         write_octal_6(
             writer.by_ref(),
-            self.dev
-                .try_into()
-                .map_err(|_| Error::other("dev value is too large"))?,
+            self.dev.try_into().map_err(|_| ErrorKind::InvalidData)?,
         )?;
         write_octal_6(
             writer.by_ref(),
-            self.ino
-                .try_into()
-                .map_err(|_| Error::other("inode value is too large"))?,
+            self.ino.try_into().map_err(|_| ErrorKind::InvalidData)?,
         )?;
         write_octal_6(writer.by_ref(), self.mode)?;
         write_octal_6(writer.by_ref(), self.uid)?;
@@ -186,9 +358,7 @@ impl Metadata {
         write_octal_6(writer.by_ref(), self.nlink)?;
         write_octal_6(
             writer.by_ref(),
-            self.rdev
-                .try_into()
-                .map_err(|_| Error::other("rdev value is too large"))?,
+            self.rdev.try_into().map_err(|_| ErrorKind::InvalidData)?,
         )?;
         write_octal_11(writer.by_ref(), zero_on_overflow(self.mtime, MAX_11))?;
         write_octal_6(writer.by_ref(), self.name_len)?;
@@ -209,7 +379,7 @@ impl Metadata {
         let rdev_major = read_hex_8(reader.by_ref())?;
         let rdev_minor = read_hex_8(reader.by_ref())?;
         let name_len = read_hex_8(reader.by_ref())?;
-        let _check = read_hex_8(reader.by_ref())?;
+        let check = read_hex_8(reader.by_ref())?;
         Ok(Self {
             dev: makedev(dev_major, dev_minor),
             ino: ino as u64,
@@ -221,16 +391,15 @@ impl Metadata {
             mtime: mtime as u64,
             name_len,
             file_size: file_size as u64,
+            check,
         })
     }
 
-    fn write_newc<W: Write>(&self, mut writer: W) -> Result<(), Error> {
-        writer.write_all(&NEWC_MAGIC[..])?;
+    fn write_newc<W: Write>(&self, mut writer: W, magic: &[u8]) -> Result<(), Error> {
+        writer.write_all(magic)?;
         write_hex_8(
             writer.by_ref(),
-            self.ino
-                .try_into()
-                .map_err(|_| Error::other("inode value is too large"))?,
+            self.ino.try_into().map_err(|_| ErrorKind::InvalidData)?,
         )?;
         write_hex_8(writer.by_ref(), self.mode)?;
         write_hex_8(writer.by_ref(), self.uid)?;
@@ -244,15 +413,14 @@ impl Metadata {
             writer.by_ref(),
             self.file_size
                 .try_into()
-                .map_err(|_| Error::other("file is too large"))?,
+                .map_err(|_| ErrorKind::InvalidData)?,
         )?;
         write_hex_8(writer.by_ref(), major(self.dev))?;
         write_hex_8(writer.by_ref(), minor(self.dev))?;
         write_hex_8(writer.by_ref(), major(self.rdev))?;
         write_hex_8(writer.by_ref(), minor(self.rdev))?;
         write_hex_8(writer.by_ref(), self.name_len)?;
-        // check
-        write_hex_8(writer.by_ref(), 0)?;
+        write_hex_8(writer.by_ref(), self.check)?;
         Ok(())
     }
 }
@@ -271,20 +439,55 @@ impl TryFrom<&std::fs::Metadata> for Metadata {
             mtime: other.mtime() as u64,
             name_len: 0,
             file_size: other.size(),
+            check: 0,
         })
     }
 }
 
+pub(crate) type MetadataId = (u64, u64);
+
 /// CPIO archive format.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[cfg_attr(test, derive(arbitrary::Arbitrary))]
 pub enum Format {
+    /// New binary format.
+    Bin(ByteOrder),
     /// Old character format.
     Odc,
     /// New ASCII format.
     Newc,
     /// New CRC format.
     Crc,
+}
+
+/// Byte order.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[cfg_attr(test, derive(arbitrary::Arbitrary))]
+pub enum ByteOrder {
+    /// Little-endian.
+    LittleEndian,
+    /// Big-endian.
+    BigEndian,
+}
+
+impl ByteOrder {
+    /// Get the current's platform byte order.
+    #[cfg(target_endian = "little")]
+    pub const fn native() -> Self {
+        Self::LittleEndian
+    }
+
+    /// Get the current's platform byte order.
+    #[cfg(target_endian = "big")]
+    pub const fn native() -> Self {
+        Self::BigEndian
+    }
+}
+
+impl Default for ByteOrder {
+    fn default() -> Self {
+        Self::native()
+    }
 }
 
 const fn zero_on_overflow(value: u64, max: u64) -> u64 {
@@ -303,6 +506,41 @@ mod tests {
     use arbtest::arbtest;
 
     use super::*;
+
+    #[test]
+    fn bin_header_write_read_symmetry() {
+        arbtest(|u| {
+            let expected: Metadata = u.arbitrary::<BinHeader>()?.0;
+            let expected_format = Format::Bin(u.arbitrary()?);
+            let mut bytes = Vec::new();
+            expected.write(&mut bytes, expected_format).unwrap();
+            let (actual, actual_format) = Metadata::read(&bytes[..]).unwrap();
+            assert_eq!(expected, actual);
+            assert_eq!(expected_format, actual_format);
+            Ok(())
+        });
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct BinHeader(Metadata);
+
+    impl<'a> Arbitrary<'a> for BinHeader {
+        fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
+            Ok(Self(Metadata {
+                dev: u.int_in_range(0..=u16::MAX)? as u64,
+                ino: u.int_in_range(0..=u16::MAX)? as u64,
+                mode: u.int_in_range(0..=u16::MAX)? as u32,
+                uid: u.int_in_range(0..=u16::MAX)? as u32,
+                gid: u.int_in_range(0..=u16::MAX)? as u32,
+                nlink: u.int_in_range(0..=u16::MAX)? as u32,
+                rdev: u.int_in_range(0..=u16::MAX)? as u64,
+                mtime: u.int_in_range(0..=u16::MAX)? as u64,
+                name_len: u.int_in_range(0..=u16::MAX)? as u32,
+                file_size: u.int_in_range(0..=u16::MAX)? as u64,
+                check: 0,
+            }))
+        }
+    }
 
     #[test]
     fn odc_header_write_read_symmetry() {
@@ -334,6 +572,7 @@ mod tests {
                 mtime: u.int_in_range(0..=MAX_11)?,
                 name_len: u.int_in_range(0..=MAX_6)?,
                 file_size: u.int_in_range(0..=MAX_11)?,
+                check: 0,
             }))
         }
     }
@@ -368,7 +607,14 @@ mod tests {
                 mtime: u.int_in_range(0..=MAX_8 as u64)?,
                 name_len: u.int_in_range(0..=MAX_8)?,
                 file_size: u.int_in_range(0..=MAX_8 as u64)?,
+                check: u.int_in_range(0..=MAX_8)?,
             }))
+        }
+    }
+
+    impl Metadata {
+        fn read<R: Read>(reader: R) -> Result<(Self, Format), Error> {
+            Self::read_some(reader).map(|x| x.unwrap())
         }
     }
 }

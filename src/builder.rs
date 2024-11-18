@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs::read_link;
 use std::fs::File;
 use std::io::Error;
+use std::io::ErrorKind;
 use std::io::Read;
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
@@ -10,17 +11,22 @@ use std::path::Path;
 
 use crate::constants::*;
 use crate::io::*;
+use crate::CrcWriter;
 use crate::Format;
 use crate::Metadata;
+use crate::MetadataId;
 use crate::Walk;
 
 /// CPIO archive writer.
 pub struct Builder<W: Write> {
     writer: W,
     max_inode: u32,
+    max_dev: u16,
     format: Format,
-    // Inodes mapping.
-    inodes: HashMap<u64, u32>,
+    // (dev, inode) -> (inode, check) mapping.
+    inodes: HashMap<MetadataId, (u32, u32)>,
+    // Long device ID -> short device ID.
+    devices: HashMap<u64, u16>,
 }
 
 impl<W: Write> Builder<W> {
@@ -29,14 +35,21 @@ impl<W: Write> Builder<W> {
         Self {
             writer,
             max_inode: 0,
+            max_dev: 0,
             format: Format::Newc,
             inodes: Default::default(),
+            devices: Default::default(),
         }
     }
 
     /// Set entries' format.
     pub fn set_format(&mut self, format: Format) {
         self.format = format;
+    }
+
+    /// Get entries' format.
+    pub fn format(&self) -> Format {
+        self.format
     }
 
     /// Append raw entry.
@@ -46,14 +59,33 @@ impl<W: Write> Builder<W> {
         inner_path: P,
         mut data: R,
     ) -> Result<Metadata, Error> {
-        self.fix_header(&mut metadata, inner_path.as_ref())?;
+        let is_hard_link = self.fix_header(&mut metadata, inner_path.as_ref())?;
+        let is_crc = matches!(self.format, Format::Crc) && metadata.is_file() && !is_hard_link;
+        let file_contents = if is_crc {
+            let mut crc_writer = CrcWriter::new(Vec::new());
+            std::io::copy(&mut data, &mut crc_writer)?;
+            metadata.check = crc_writer.sum();
+            if let Some(entry) = self.inodes.get_mut(&metadata.id()) {
+                // update crc
+                entry.1 = metadata.check;
+            }
+            crc_writer.into_inner()
+        } else {
+            Vec::new()
+        };
         metadata.write(self.writer.by_ref(), self.format)?;
         write_path(self.writer.by_ref(), inner_path.as_ref(), self.format)?;
         if metadata.file_size != 0 {
-            let n = std::io::copy(&mut data, self.writer.by_ref())?;
-            if matches!(self.format, Format::Newc | Format::Crc) {
-                write_padding(self.writer.by_ref(), n as usize)?;
+            let n = if is_crc {
+                self.writer.write_all(&file_contents)?;
+                file_contents.len() as u64
+            } else {
+                std::io::copy(&mut data, self.writer.by_ref())?
+            };
+            if n != metadata.file_size {
+                return Err(ErrorKind::InvalidData.into());
             }
+            write_file_padding(self.writer.by_ref(), n, self.format)?;
         }
         Ok(metadata)
     }
@@ -136,43 +168,76 @@ impl<W: Write> Builder<W> {
             mtime: 0,
             name_len: len as u32,
             file_size: 0,
+            check: 0,
         };
         metadata.write(self.writer.by_ref(), self.format)?;
-        write_c_str(self.writer.by_ref(), TRAILER)?;
-        if matches!(self.format, Format::Newc | Format::Crc) {
-            write_padding(self.writer.by_ref(), NEWC_HEADER_LEN + len)?;
-        }
+        write_path_c_str(self.writer.by_ref(), TRAILER, self.format)?;
         Ok(())
     }
 
-    fn fix_header(&mut self, metadata: &mut Metadata, name: &Path) -> Result<(), Error> {
-        use std::collections::hash_map::Entry::*;
-        let inode = match self.inodes.entry(metadata.ino) {
-            Vacant(v) => {
-                let inode = self.max_inode;
-                self.max_inode += 1;
-                v.insert(inode);
-                inode
-            }
-            Occupied(o) => {
-                if matches!(self.format, Format::Newc | Format::Crc) {
-                    metadata.file_size = 0;
-                }
-                *o.get()
-            }
-        };
+    fn fix_header(&mut self, metadata: &mut Metadata, name: &Path) -> Result<bool, Error> {
+        self.remap_device_id(metadata);
+        let is_hard_link = self.remap_inode(metadata);
         let name_len = name.as_os_str().as_bytes().len();
         let max = match self.format {
             Format::Newc | Format::Crc => MAX_8,
             Format::Odc => MAX_6,
+            Format::Bin(..) => u16::MAX as u32,
         };
         // -1 due to null byte
         if name_len > max as usize - 1 {
-            return Err(Error::other("file name is too long"));
+            return Err(ErrorKind::InvalidData.into());
         }
         // +1 due to null byte
         metadata.name_len = (name_len + 1) as u32;
+        Ok(is_hard_link)
+    }
+
+    /// Remap device id if needed.
+    fn remap_device_id(&mut self, metadata: &mut Metadata) {
+        use std::collections::hash_map::Entry::*;
+        match self.format {
+            Format::Odc | Format::Bin(..) => {
+                let dev = match self.devices.entry(metadata.dev) {
+                    Vacant(v) => {
+                        let dev = self.max_dev;
+                        self.max_dev += 1;
+                        v.insert(dev);
+                        dev
+                    }
+                    Occupied(o) => *o.get(),
+                };
+                metadata.dev = dev as u64;
+            }
+            Format::Newc | Format::Crc => {
+                // not needed, device is stored as two u32 numbers
+            }
+        };
+    }
+
+    /// Always remap inode.
+    fn remap_inode(&mut self, metadata: &mut Metadata) -> bool {
+        use std::collections::hash_map::Entry::*;
+        let mut is_hard_link = false;
+        let inode = match self.inodes.entry(metadata.id()) {
+            Vacant(v) => {
+                let inode = self.max_inode;
+                self.max_inode += 1;
+                v.insert((inode, 0));
+                inode
+            }
+            Occupied(o) => {
+                let (inode, check) = *o.get();
+                if matches!(self.format, Format::Newc | Format::Crc) {
+                    // the data is only stored for the first hard link
+                    metadata.file_size = 0;
+                    metadata.check = check;
+                    is_hard_link = true;
+                }
+                inode
+            }
+        };
         metadata.ino = inode as u64;
-        Ok(())
+        is_hard_link
     }
 }

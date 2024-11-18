@@ -4,7 +4,7 @@
 [![Docs](https://docs.rs/kpea/badge.svg)](https://docs.rs/kpea)
 [![dependency status](https://deps.rs/repo/github/igankevich/kpea/status.svg)](https://deps.rs/repo/github/igankevich/kpea)
 
-CPIO archive reader/writer library. Supports _New ASCII_ and _Old character_ formats.
+CPIO archive reader/writer library. Supports _New ASCII_, _New CRC_, _Old character_, and _New binary_ formats.
 
 
 ## Introduction

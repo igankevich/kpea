@@ -7,6 +7,7 @@ use std::fs::set_permissions;
 use std::fs::File;
 use std::fs::Permissions;
 use std::io::Error;
+use std::io::ErrorKind;
 use std::io::IoSliceMut;
 use std::io::Read;
 use std::io::Take;
@@ -29,18 +30,23 @@ use crate::mkfifo;
 use crate::mknod;
 use crate::path_to_c_string;
 use crate::set_file_modified_time;
+use crate::CrcWriter;
 use crate::FileType;
 use crate::Format;
 use crate::Metadata;
+use crate::MetadataId;
 
 /// CPIO archive reader.
 pub struct Archive<R: Read> {
     // TODO optimize inodes for Read + Seek
     reader: R,
     // Inode -> file contents mapping for files that have > 1 hard links.
-    contents: HashMap<u64, Vec<u8>>,
+    contents: HashMap<MetadataId, Vec<u8>>,
+    // current entry's contents
+    cur_contents: Vec<u8>,
     preserve_mtime: bool,
     preserve_owner: bool,
+    verify_crc: bool,
 }
 
 impl<R: Read> Archive<R> {
@@ -49,8 +55,10 @@ impl<R: Read> Archive<R> {
         Self {
             reader,
             contents: Default::default(),
+            cur_contents: Default::default(),
             preserve_mtime: false,
             preserve_owner: false,
+            verify_crc: false,
         }
     }
 
@@ -66,6 +74,13 @@ impl<R: Read> Archive<R> {
     /// `false` by default.
     pub fn preserve_owner(&mut self, value: bool) {
         self.preserve_owner = value;
+    }
+
+    /// Verify files' checksums.
+    ///
+    /// `false` by default.
+    pub fn verify_crc(&mut self, value: bool) {
+        self.verify_crc = value;
     }
 
     /// Get mutable reference to the underyling reader.
@@ -113,9 +128,7 @@ impl<R: Read> Archive<R> {
                 Occupied(o) => {
                     let (original, original_file_size) = o.get();
                     hard_link(original, &path)?;
-                    if entry.metadata.file_type()? == FileType::Regular
-                        && *original_file_size < entry.metadata.file_size
-                    {
+                    if entry.metadata.is_file() && *original_file_size < entry.metadata.file_size {
                         let old_mode = path.metadata()?.mode();
                         if !is_writable(old_mode) {
                             // make writable
@@ -244,6 +257,16 @@ impl<R: Read> Archive<R> {
     ///
     /// Returns `Ok(None)` when the end of the archive is reached.
     pub fn read_entry(&mut self) -> Result<Option<Entry<R>>, Error> {
+        fn read_and_verify_crc(reader: &mut impl Read, check: u32) -> Result<Vec<u8>, Error> {
+            let mut crc_writer = CrcWriter::new(Vec::new());
+            std::io::copy(reader, &mut crc_writer)?;
+            let actual_sum = crc_writer.sum();
+            if actual_sum != check {
+                return Err(ErrorKind::InvalidData.into());
+            }
+            Ok(crc_writer.into_inner())
+        }
+
         let Some((metadata, format)) = Metadata::read_some(self.reader.by_ref())? else {
             return Ok(None);
         };
@@ -251,23 +274,42 @@ impl<R: Read> Archive<R> {
         if path.as_os_str().as_bytes() == TRAILER.to_bytes() {
             return Ok(None);
         }
-        let reader = if matches!(format, Format::Newc | Format::Crc) {
-            let file_type = metadata.file_type()?;
-            if metadata.file_size != 0 && metadata.nlink > 1 && file_type != FileType::Directory {
-                let mut contents = Vec::new();
-                std::io::copy(
-                    &mut self.reader.by_ref().take(metadata.file_size),
-                    &mut contents,
-                )?;
-                self.contents.insert(metadata.ino, contents);
+        let reader = match format {
+            Format::Newc | Format::Crc => {
+                let file_type = metadata.file_type()?;
+                let verify_crc = matches!(format, Format::Crc)
+                    && self.verify_crc
+                    && matches!(file_type, FileType::Regular);
+                if metadata.file_size != 0 && metadata.nlink > 1 && file_type != FileType::Directory
+                {
+                    let mut reader = self.reader.by_ref().take(metadata.file_size);
+                    let contents = if verify_crc {
+                        read_and_verify_crc(&mut reader, metadata.check)?
+                    } else {
+                        let mut contents = Vec::new();
+                        std::io::copy(&mut reader, &mut contents)?;
+                        contents
+                    };
+                    self.contents.insert(metadata.id(), contents);
+                }
+                let contents = self.contents.get(&metadata.id()).map(|x| x.as_slice());
+                match contents {
+                    Some(slice) => InnerEntryReader::Slice(slice, self.reader.by_ref()),
+                    None => {
+                        if verify_crc {
+                            let mut reader = self.reader.by_ref().take(metadata.file_size);
+                            self.cur_contents = read_and_verify_crc(&mut reader, metadata.check)?;
+                            InnerEntryReader::Slice(&self.cur_contents[..], self.reader.by_ref())
+                        } else {
+                            let reader = self.reader.by_ref().take(metadata.file_size);
+                            InnerEntryReader::Stream(reader)
+                        }
+                    }
+                }
             }
-            let contents = self.contents.get(&metadata.ino).map(|x| x.as_slice());
-            match contents {
-                Some(slice) => InnerEntryReader::Slice(slice, self.reader.by_ref()),
-                None => InnerEntryReader::Stream(self.reader.by_ref().take(metadata.file_size)),
+            Format::Odc | Format::Bin(..) => {
+                InnerEntryReader::Stream(self.reader.by_ref().take(metadata.file_size))
             }
-        } else {
-            InnerEntryReader::Stream(self.reader.by_ref().take(metadata.file_size))
         };
         Ok(Some(Entry {
             metadata,
@@ -331,10 +373,7 @@ impl<'a, R: Read> EntryReader<'a, R> {
         }
         let reader = self.get_mut();
         // handle padding
-        if matches!(format, Format::Newc | Format::Crc) {
-            let n = metadata.file_size as usize;
-            read_padding(reader, n)?;
-        }
+        read_file_padding(reader, metadata.file_size as usize, format)?;
         Ok(())
     }
 }

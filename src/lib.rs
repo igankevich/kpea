@@ -3,6 +3,7 @@
 mod archive;
 mod builder;
 mod constants;
+mod crc;
 mod dev;
 mod file_type;
 mod io;
@@ -12,6 +13,7 @@ mod walk;
 
 pub use self::archive::*;
 pub use self::builder::*;
+pub(crate) use self::crc::*;
 pub(crate) use self::dev::*;
 pub use self::file_type::*;
 pub use self::metadata::*;

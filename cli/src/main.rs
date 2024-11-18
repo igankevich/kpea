@@ -11,6 +11,7 @@ use std::str::FromStr;
 use clap::Parser;
 use cpio::Archive;
 use cpio::Builder;
+use cpio::ByteOrder;
 
 fn do_main() -> Result<ExitCode, Error> {
     let args = Args::parse();
@@ -31,12 +32,7 @@ fn do_main() -> Result<ExitCode, Error> {
 fn copy_out(args: Args) -> Result<(), Error> {
     let mut reader = BufReader::new(std::io::stdin());
     let mut builder = Builder::new(std::io::stdout());
-    let format = match args.format {
-        // crc is only supported for reading
-        Format::Crc => Format::Newc,
-        other => other,
-    };
-    builder.set_format(format.into());
+    builder.set_format(args.format.into());
     let delimiter = if args.null_terminated { 0_u8 } else { b'\n' };
     loop {
         let mut line = Vec::new();
@@ -61,8 +57,13 @@ fn copy_out(args: Args) -> Result<(), Error> {
 
 fn copy_in(args: Args) -> Result<(), Error> {
     let mut archive = Archive::new(std::io::stdin());
-    archive.preserve_mtime(args.preserve_mtime);
-    archive.unpack(Path::new("."))?;
+    if args.only_verify_crc {
+        archive.verify_crc(true);
+        while archive.read_entry()?.is_some() {}
+    } else {
+        archive.preserve_mtime(args.preserve_mtime);
+        archive.unpack(Path::new("."))?;
+    }
     Ok(())
 }
 
@@ -90,6 +91,7 @@ enum Format {
     Newc,
     Crc,
     Odc,
+    Bin(ByteOrder),
 }
 
 impl FromStr for Format {
@@ -99,8 +101,11 @@ impl FromStr for Format {
             "odc" => Ok(Format::Odc),
             "newc" => Ok(Format::Newc),
             "crc" => Ok(Format::Crc),
+            "bin" => Ok(Format::Bin(ByteOrder::native())),
+            "bin-le" | "bin_le" => Ok(Format::Bin(ByteOrder::LittleEndian)),
+            "bin-be" | "bin_be" => Ok(Format::Bin(ByteOrder::BigEndian)),
             s => Err(Error::other(format!(
-                "unknown format `{}`, supported formats: odc, newc, crc",
+                "unknown format `{}`, supported formats: odc, newc, crc, bin, bin-le, bin-be",
                 s
             ))),
         }
@@ -113,6 +118,7 @@ impl From<Format> for cpio::Format {
             Format::Newc => cpio::Format::Newc,
             Format::Odc => cpio::Format::Odc,
             Format::Crc => cpio::Format::Crc,
+            Format::Bin(byte_order) => cpio::Format::Bin(byte_order),
         }
     }
 }
@@ -140,6 +146,9 @@ struct Args {
     /// Do not print informational messages.
     #[arg(short = 'q', long = "quiet")]
     quiet: bool,
+    /// Verify files' checksum without unpacking them.
+    #[arg(long = "only-verify-crc")]
+    only_verify_crc: bool,
     /// CPIO format.
     #[arg(
         value_enum,
