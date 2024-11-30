@@ -122,7 +122,7 @@ impl DirBuilder {
             };
             match kind {
                 Regular => {
-                    let mode = u.int_in_range(0o400..=0o777)?;
+                    let mode = u.int_in_range(0..=0o777)? | 0o400;
                     let contents: Vec<u8> = u.arbitrary()?;
                     let mut file = File::create(&path).unwrap();
                     file.write_all(&contents).unwrap();
@@ -130,7 +130,7 @@ impl DirBuilder {
                     file.set_modified(t).unwrap();
                 }
                 Directory => {
-                    let mode = u.int_in_range(0o500..=0o777)?;
+                    let mode = u.int_in_range(0..=0o777)? | 0o500;
                     std::fs::DirBuilder::new()
                         .mode(mode)
                         .recursive(true)
@@ -140,7 +140,7 @@ impl DirBuilder {
                     set_file_modified_time(&path, t).unwrap();
                 }
                 Fifo => {
-                    let mode = u.int_in_range(0o400..=0o777)?;
+                    let mode = u.int_in_range(0..=0o777)? | 0o400;
                     let path = path_to_c_string(path.clone()).unwrap();
                     mkfifo(&path, mode).unwrap();
                     set_file_modified_time(&path, t).unwrap();

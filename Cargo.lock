@@ -152,7 +152,7 @@ dependencies = [
 
 [[package]]
 name = "cpio-cli"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "arbtest",
  "clap",
@@ -211,7 +211,7 @@ checksum = "7943c866cc5cd64cbc25b2e01621d07fa8eb2a1a23160ee81ce38704e97b8ecf"
 
 [[package]]
 name = "kpea"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "arbitrary",
  "arbtest",
@@ -279,7 +279,7 @@ dependencies = [
 
 [[package]]
 name = "random-dir"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "arbitrary",
  "libc",
