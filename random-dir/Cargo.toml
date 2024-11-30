@@ -1,8 +1,8 @@
 [package]
 name = "random-dir"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
-license = "MIT"
+license.workspace = true
 description = "Create directories and files with random contents in tests."
 keywords = ["random", "directory", "test"]
 categories = ["development-tools", "filesystem"]
