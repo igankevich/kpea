@@ -1,5 +1,5 @@
 [package]
-name = "cpio-test"
+name = "random-dir"
 version.workspace = true
 edition = "2021"
 license.workspace = true

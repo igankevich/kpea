@@ -156,23 +156,11 @@ version = "0.2.0"
 dependencies = [
  "arbtest",
  "clap",
- "cpio-test",
  "kpea",
+ "random-dir",
  "similar-asserts",
  "tempfile",
  "test_bin",
- "walkdir",
-]
-
-[[package]]
-name = "cpio-test"
-version = "0.2.0"
-dependencies = [
- "arbitrary",
- "arbtest",
- "libc",
- "normalize-path",
- "tempfile",
  "walkdir",
 ]
 
@@ -227,9 +215,9 @@ version = "0.2.0"
 dependencies = [
  "arbitrary",
  "arbtest",
- "cpio-test",
  "libc",
  "normalize-path",
+ "random-dir",
  "similar-asserts",
  "tempfile",
  "walkdir",
@@ -287,6 +275,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5b9d34b8991d19d98081b46eacdd8eb58c6f2b201139f7c5f643cc155a633af"
 dependencies = [
  "proc-macro2",
+]
+
+[[package]]
+name = "random-dir"
+version = "0.2.0"
+dependencies = [
+ "arbitrary",
+ "arbtest",
+ "libc",
+ "normalize-path",
+ "tempfile",
+ "walkdir",
 ]
 
 [[package]]

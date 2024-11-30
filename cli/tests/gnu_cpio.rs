@@ -12,8 +12,8 @@ use std::process::Command;
 use std::sync::Once;
 
 use arbtest::arbtest;
-use cpio_test::list_dir_all;
-use cpio_test::DirectoryOfFiles;
+use random_dir::list_dir_all;
+use random_dir::Dir;
 use tempfile::TempDir;
 use test_bin::get_test_bin;
 use walkdir::WalkDir;
@@ -110,7 +110,7 @@ where
         cpio1.arg("-o");
         remove_dir_all(&unpack_dir).ok();
         create_dir_all(&unpack_dir).unwrap();
-        let directory: DirectoryOfFiles = u.arbitrary()?;
+        let directory: Dir = u.arbitrary()?;
         if !allow_hard_link_to_symlink && contains_hard_link_to_symlink(directory.path()).unwrap() {
             eprintln!("two symlinks with the same inode found: skipping");
             return Ok(());
@@ -173,7 +173,7 @@ fn copy_out_copy_in<F1, F2>(
         cpio1.arg("-o");
         remove_dir_all(&unpack_dir).ok();
         create_dir_all(&unpack_dir).unwrap();
-        let directory: DirectoryOfFiles = u.arbitrary()?;
+        let directory: Dir = u.arbitrary()?;
         if !allow_hard_link_to_symlink && contains_hard_link_to_symlink(directory.path()).unwrap() {
             eprintln!("two symlinks with the same inode found: skipping");
             return Ok(());

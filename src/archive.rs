@@ -449,8 +449,8 @@ mod tests {
     use std::fs::remove_dir_all;
 
     use arbtest::arbtest;
-    use cpio_test::list_dir_all;
-    use cpio_test::DirectoryOfFiles;
+    use random_dir::list_dir_all;
+    use random_dir::Dir;
     use tempfile::TempDir;
     use walkdir::WalkDir;
 
@@ -462,7 +462,7 @@ mod tests {
     fn cpio_write_read() {
         let workdir = TempDir::new().unwrap();
         arbtest(|u| {
-            let directory: DirectoryOfFiles = u.arbitrary()?;
+            let directory: Dir = u.arbitrary()?;
             let cpio_path = workdir.path().join("test.cpio");
             let mut expected_headers = Vec::new();
             let mut expected_files = Vec::new();
@@ -525,7 +525,7 @@ mod tests {
     fn cpio_pack_unpack() {
         let workdir = TempDir::new().unwrap();
         arbtest(|u| {
-            let directory: DirectoryOfFiles = u.arbitrary()?;
+            let directory: Dir = u.arbitrary()?;
             let cpio_path = workdir.path().join("test.cpio");
             Builder::pack(File::create(&cpio_path).unwrap(), directory.path()).unwrap();
             let unpack_dir = workdir.path().join("unpacked");

@@ -1,5 +1,5 @@
-mod file;
+mod dir;
 mod mk;
 
-pub use self::file::*;
+pub use self::dir::*;
 pub(crate) use self::mk::*;
