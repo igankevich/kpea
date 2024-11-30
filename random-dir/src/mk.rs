@@ -5,11 +5,13 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+use libc::dev_t;
+use libc::mode_t;
 use libc::AT_FDCWD;
 use libc::AT_SYMLINK_NOFOLLOW;
 use libc::UTIME_OMIT;
 
-pub fn mkfifo(path: &CStr, mode: u32) -> Result<(), Error> {
+pub fn mkfifo(path: &CStr, mode: mode_t) -> Result<(), Error> {
     let ret = unsafe { libc::mkfifo(path.as_ptr(), mode) };
     if ret < 0 {
         return Err(Error::last_os_error());
@@ -17,7 +19,7 @@ pub fn mkfifo(path: &CStr, mode: u32) -> Result<(), Error> {
     Ok(())
 }
 
-pub fn mknod(path: &CStr, mode: u32, dev: u64) -> Result<(), Error> {
+pub fn mknod(path: &CStr, mode: mode_t, dev: dev_t) -> Result<(), Error> {
     let ret = unsafe { libc::mknod(path.as_ptr(), mode, dev) };
     if ret < 0 {
         return Err(Error::last_os_error());

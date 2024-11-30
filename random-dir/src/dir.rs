@@ -22,6 +22,7 @@ use std::time::SystemTime;
 
 use arbitrary::Arbitrary;
 use arbitrary::Unstructured;
+use libc::dev_t;
 use libc::makedev;
 use normalize_path::NormalizePath;
 use tempfile::TempDir;
@@ -41,8 +42,17 @@ impl DirBuilder {
     /// Create new directory builder with default parameters.
     pub fn new() -> Self {
         Self {
+            #[cfg(not(target_os = "macos"))]
             printable_names: false,
+            #[cfg(target_os = "macos")]
+            printable_names: true,
+            #[cfg(not(target_os = "macos"))]
             file_types: ALL_FILE_TYPES.into(),
+            #[cfg(target_os = "macos")]
+            file_types: {
+                use FileType::*;
+                [Regular, Directory, Fifo, Socket, Symlink, HardLink].into()
+            },
         }
     }
 
@@ -140,17 +150,17 @@ impl DirBuilder {
                     let path = path_to_c_string(path.clone()).unwrap();
                     set_file_modified_time(&path, t).unwrap();
                 }
+                #[allow(unused_unsafe)]
                 BlockDevice => {
                     // dev loop
-                    let dev = makedev(7, 0);
+                    let dev = unsafe { makedev(7, 0) };
                     let mode = u.int_in_range(0o400..=0o777)?;
                     let path = path_to_c_string(path.clone()).unwrap();
                     mknod(&path, mode, dev).unwrap();
                     set_file_modified_time(&path, t).unwrap();
                 }
                 CharDevice => {
-                    // dev null
-                    let dev = makedev(1, 3);
+                    let dev = arbitrary_char_dev();
                     let mode = u.int_in_range(0o400..=0o777)?;
                     let path = path_to_c_string(path.clone()).unwrap();
                     mknod(&path, mode, dev).unwrap();
@@ -219,7 +229,7 @@ pub enum FileType {
     HardLink,
 }
 
-const ALL_FILE_TYPES: [FileType; 8] = {
+pub const ALL_FILE_TYPES: [FileType; 8] = {
     use FileType::*;
     [
         Regular,
@@ -315,4 +325,17 @@ impl TryFrom<&std::fs::Metadata> for Metadata {
             file_size: other.size(),
         })
     }
+}
+
+#[allow(unused_unsafe)]
+#[cfg(target_os = "linux")]
+fn arbitrary_char_dev() -> dev_t {
+    // /dev/null
+    makedev(1, 3)
+}
+
+#[cfg(target_os = "macos")]
+fn arbitrary_char_dev() -> dev_t {
+    // /dev/null
+    unsafe { makedev(3, 2) }
 }

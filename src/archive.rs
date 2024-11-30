@@ -21,6 +21,8 @@ use std::os::unix::net::UnixDatagram;
 use std::path::Path;
 use std::path::PathBuf;
 
+use libc::dev_t;
+use libc::mode_t;
 use normalize_path::NormalizePath;
 
 use crate::constants::*;
@@ -193,7 +195,7 @@ impl<R: Read> Archive<R> {
                 }
                 FileType::Fifo => {
                     let path = path_to_c_string(path)?;
-                    mkfifo(&path, entry.metadata.mode)?;
+                    mkfifo(&path, entry.metadata.mode as mode_t)?;
                     if preserve_mtime {
                         if let Ok(modified) = entry.metadata.modified() {
                             set_file_modified_time(&path, modified)?;
@@ -217,7 +219,11 @@ impl<R: Read> Archive<R> {
                 }
                 FileType::BlockDevice | FileType::CharDevice => {
                     let path = path_to_c_string(path)?;
-                    mknod(&path, entry.metadata.mode, entry.metadata.rdev())?;
+                    mknod(
+                        &path,
+                        entry.metadata.mode as mode_t,
+                        entry.metadata.rdev() as dev_t,
+                    )?;
                     if preserve_mtime {
                         if let Ok(modified) = entry.metadata.modified() {
                             set_file_modified_time(&path, modified)?;
