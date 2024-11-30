@@ -1,12 +1,15 @@
 [package]
 name = "random-dir"
-version.workspace = true
+version = "0.1.0"
 edition = "2021"
-license.workspace = true
+license = "MIT"
+description = "Create directories and files with random contents in tests."
+keywords = ["random", "directory", "test"]
+categories = ["development-tools", "filesystem"]
+include = ["**/*.rs", "Cargo.toml", "README.md", "LICENSE"]
 
 [dependencies]
 arbitrary = { version = "1.4.1", features = ["derive", "derive_arbitrary"] }
-arbtest = "0.3.1"
 libc = "0.2.162"
 normalize-path = "0.2.1"
 tempfile = "3.14.0"
