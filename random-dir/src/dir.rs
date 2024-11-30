@@ -49,18 +49,20 @@ impl DirBuilder {
     /// Generate files with printable names, i.e. names consisting only from printable characters.
     ///
     /// Useful to test CLI applications.
-    pub fn printable_names(&mut self, value: bool) {
+    pub fn printable_names(mut self, value: bool) -> Self {
         self.printable_names = value;
+        self
     }
 
     /// Which file types to generate?
     ///
     /// By default any Unix file type can be generated.
-    pub fn file_types<I>(&mut self, file_types: I)
+    pub fn file_types<I>(mut self, file_types: I) -> Self
     where
         I: IntoIterator<Item = FileType>,
     {
         self.file_types = file_types.into_iter().collect();
+        self
     }
 
     pub fn create(self, u: &mut Unstructured<'_>) -> arbitrary::Result<Dir> {
