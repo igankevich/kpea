@@ -6,11 +6,12 @@ use std::os::unix::fs::MetadataExt;
 use std::time::Duration;
 use std::time::SystemTime;
 
+use libc::major;
+use libc::makedev;
+use libc::minor;
+
 use crate::constants::*;
 use crate::io::*;
-use crate::major;
-use crate::makedev;
-use crate::minor;
 use crate::mode_to_file_type;
 use crate::FileType;
 
@@ -201,6 +202,7 @@ impl Metadata {
         }
     }
 
+    #[allow(unused_unsafe)]
     fn read_bin<R: Read>(mut reader: R, byte_order: ByteOrder) -> Result<Self, Error> {
         let dev;
         let ino;
@@ -239,13 +241,13 @@ impl Metadata {
             }
         }
         Ok(Self {
-            dev: dev as u64,
+            dev: unsafe { makedev(((dev >> 8) & 0xff) as _, (dev & 0xff) as _) } as _,
             ino: ino as u64,
             mode: mode as u32,
             uid: uid as u32,
             gid: gid as u32,
             nlink: nlink as u32,
-            rdev: makedev(((majmin >> 8) & 0xff) as u32, (majmin & 0xff) as u32),
+            rdev: unsafe { makedev(((majmin >> 8) & 0xff) as _, (majmin & 0xff) as _) } as _,
             mtime: mtime as u64,
             name_len: name_len as u32,
             file_size: file_size as u64,
@@ -255,8 +257,12 @@ impl Metadata {
 
     fn write_bin<W: Write>(&self, mut writer: W, byte_order: ByteOrder) -> Result<(), Error> {
         fn dev64_to_dev16(dev: u64) -> Result<u16, Error> {
-            let major: u8 = major(dev).try_into().map_err(|_| ErrorKind::InvalidData)?;
-            let minor: u8 = minor(dev).try_into().map_err(|_| ErrorKind::InvalidData)?;
+            let major: u8 = unsafe { major(dev as _) }
+                .try_into()
+                .map_err(|_| ErrorKind::InvalidData)?;
+            let minor: u8 = unsafe { minor(dev as _) }
+                .try_into()
+                .map_err(|_| ErrorKind::InvalidData)?;
             let dev = ((major as u16) << 8) | (minor as u16);
             Ok(dev)
         }
@@ -366,6 +372,7 @@ impl Metadata {
         Ok(())
     }
 
+    #[allow(unused_unsafe)]
     fn read_newc<R: Read>(mut reader: R) -> Result<Self, Error> {
         let ino = read_hex_8(reader.by_ref())?;
         let mode = read_hex_8(reader.by_ref())?;
@@ -381,13 +388,13 @@ impl Metadata {
         let name_len = read_hex_8(reader.by_ref())?;
         let check = read_hex_8(reader.by_ref())?;
         Ok(Self {
-            dev: makedev(dev_major, dev_minor),
+            dev: unsafe { makedev(dev_major as _, dev_minor as _) } as _,
             ino: ino as u64,
             mode,
             uid,
             gid,
             nlink,
-            rdev: makedev(rdev_major, rdev_minor),
+            rdev: unsafe { makedev(rdev_major as _, rdev_minor as _) } as _,
             mtime: mtime as u64,
             name_len,
             file_size: file_size as u64,
@@ -415,10 +422,10 @@ impl Metadata {
                 .try_into()
                 .map_err(|_| ErrorKind::InvalidData)?,
         )?;
-        write_hex_8(writer.by_ref(), major(self.dev))?;
-        write_hex_8(writer.by_ref(), minor(self.dev))?;
-        write_hex_8(writer.by_ref(), major(self.rdev))?;
-        write_hex_8(writer.by_ref(), minor(self.rdev))?;
+        write_hex_8(writer.by_ref(), unsafe { major(self.dev as _) } as _)?;
+        write_hex_8(writer.by_ref(), unsafe { minor(self.dev as _) } as _)?;
+        write_hex_8(writer.by_ref(), unsafe { major(self.rdev as _) } as _)?;
+        write_hex_8(writer.by_ref(), unsafe { minor(self.rdev as _) } as _)?;
         write_hex_8(writer.by_ref(), self.name_len)?;
         write_hex_8(writer.by_ref(), self.check)?;
         Ok(())
@@ -513,7 +520,12 @@ mod tests {
             let expected: Metadata = u.arbitrary::<BinHeader>()?.0;
             let expected_format = Format::Bin(u.arbitrary()?);
             let mut bytes = Vec::new();
-            expected.write(&mut bytes, expected_format).unwrap();
+            expected
+                .write(&mut bytes, expected_format)
+                .inspect_err(|_| {
+                    eprintln!("metadata = {:#?}, format = {:?}", expected, expected_format)
+                })
+                .unwrap();
             let (actual, actual_format) = Metadata::read(&bytes[..]).unwrap();
             assert_eq!(expected, actual);
             assert_eq!(expected_format, actual_format);
@@ -527,13 +539,13 @@ mod tests {
     impl<'a> Arbitrary<'a> for BinHeader {
         fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
             Ok(Self(Metadata {
-                dev: u.int_in_range(0..=u16::MAX)? as u64,
+                dev: arbitrary_dev(u)?,
                 ino: u.int_in_range(0..=u16::MAX)? as u64,
                 mode: u.int_in_range(0..=u16::MAX)? as u32,
                 uid: u.int_in_range(0..=u16::MAX)? as u32,
                 gid: u.int_in_range(0..=u16::MAX)? as u32,
                 nlink: u.int_in_range(0..=u16::MAX)? as u32,
-                rdev: u.int_in_range(0..=u16::MAX)? as u64,
+                rdev: arbitrary_dev(u)?,
                 mtime: u.int_in_range(0..=u16::MAX)? as u64,
                 name_len: u.int_in_range(0..=u16::MAX)? as u32,
                 file_size: u.int_in_range(0..=u16::MAX)? as u64,
@@ -548,7 +560,12 @@ mod tests {
             let expected: Metadata = u.arbitrary::<OdcHeader>()?.0;
             let expected_format = Format::Odc;
             let mut bytes = Vec::new();
-            expected.write(&mut bytes, expected_format).unwrap();
+            expected
+                .write(&mut bytes, expected_format)
+                .inspect_err(|_| {
+                    eprintln!("metadata = {:#?}, format = {:?}", expected, expected_format)
+                })
+                .unwrap();
             let (actual, actual_format) = Metadata::read(&bytes[..]).unwrap();
             assert_eq!(expected, actual);
             assert_eq!(expected_format, actual_format);
@@ -562,13 +579,13 @@ mod tests {
     impl<'a> Arbitrary<'a> for OdcHeader {
         fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
             Ok(Self(Metadata {
-                dev: u.int_in_range(0..=MAX_6 as u64)?,
+                dev: u.int_in_range(0..=MAX_6)? as u64,
                 ino: u.int_in_range(0..=MAX_6)? as u64,
                 mode: u.int_in_range(0..=MAX_6)?,
                 uid: u.int_in_range(0..=MAX_6)?,
                 gid: u.int_in_range(0..=MAX_6)?,
                 nlink: u.int_in_range(0..=MAX_6)?,
-                rdev: u.int_in_range(0..=MAX_6 as u64)?,
+                rdev: u.int_in_range(0..=MAX_6)? as u64,
                 mtime: u.int_in_range(0..=MAX_11)?,
                 name_len: u.int_in_range(0..=MAX_6)?,
                 file_size: u.int_in_range(0..=MAX_11)?,
@@ -597,13 +614,13 @@ mod tests {
     impl<'a> Arbitrary<'a> for NewcHeader {
         fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
             Ok(Self(Metadata {
-                dev: u.int_in_range(0..=MAX_8 as u64)?,
+                dev: arbitrary_dev(u)?,
                 ino: u.int_in_range(0..=MAX_8)? as u64,
                 mode: u.int_in_range(0..=MAX_8)?,
                 uid: u.int_in_range(0..=MAX_8)?,
                 gid: u.int_in_range(0..=MAX_8)?,
                 nlink: u.int_in_range(0..=MAX_8)?,
-                rdev: u.int_in_range(0..=MAX_8 as u64)?,
+                rdev: arbitrary_dev(u)?,
                 mtime: u.int_in_range(0..=MAX_8 as u64)?,
                 name_len: u.int_in_range(0..=MAX_8)?,
                 file_size: u.int_in_range(0..=MAX_8 as u64)?,
@@ -616,5 +633,13 @@ mod tests {
         fn read<R: Read>(reader: R) -> Result<(Self, Format), Error> {
             Self::read_some(reader).map(|x| x.unwrap())
         }
+    }
+
+    #[allow(unused_unsafe)]
+    fn arbitrary_dev(u: &mut Unstructured<'_>) -> arbitrary::Result<u64> {
+        let major: u8 = u.arbitrary()?;
+        let minor: u8 = u.arbitrary()?;
+        let dev = unsafe { makedev(major as _, minor as _) } as _;
+        Ok(dev)
     }
 }

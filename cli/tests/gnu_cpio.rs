@@ -22,7 +22,7 @@ const OUR_FORMATS: [&str; 5] = ["newc", "crc", "odc", "bin-le", "bin-be"];
 const THEIR_FORMATS: [&str; 4] = ["newc", "crc", "odc", "bin"];
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(any(miri, not(target_os = "linux")), ignore)]
 fn our_copy_out_their_copy_in() {
     copy_out_copy_in(
         || get_test_bin("cpio"),
@@ -33,7 +33,7 @@ fn our_copy_out_their_copy_in() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(any(miri, not(target_os = "linux")), ignore)]
 fn their_copy_out_our_copy_in() {
     copy_out_copy_in(
         || Command::new("cpio"),
@@ -44,7 +44,7 @@ fn their_copy_out_our_copy_in() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(any(miri, not(target_os = "linux")), ignore)]
 fn our_copy_out_our_copy_in() {
     copy_out_copy_in(
         || get_test_bin("cpio"),
@@ -55,7 +55,7 @@ fn our_copy_out_our_copy_in() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(any(miri, not(target_os = "linux")), ignore)]
 fn their_copy_out_their_copy_in() {
     copy_out_copy_in(
         || Command::new("cpio"),
@@ -66,25 +66,25 @@ fn their_copy_out_their_copy_in() {
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(any(miri, not(target_os = "linux")), ignore)]
 fn their_copy_out_our_verify_crc() {
     only_verify_crc(|| Command::new("cpio"), || get_test_bin("cpio"), false);
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(any(miri, not(target_os = "linux")), ignore)]
 fn our_copy_out_their_verify_crc() {
     only_verify_crc(|| get_test_bin("cpio"), || Command::new("cpio"), false);
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(any(miri, not(target_os = "linux")), ignore)]
 fn our_copy_out_our_verify_crc() {
     only_verify_crc(|| get_test_bin("cpio"), || get_test_bin("cpio"), true);
 }
 
 #[test]
-#[cfg_attr(miri, ignore)]
+#[cfg_attr(any(miri, not(target_os = "linux")), ignore)]
 fn their_copy_out_their_verify_crc() {
     only_verify_crc(|| Command::new("cpio"), || Command::new("cpio"), false);
 }
