@@ -5,7 +5,7 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
 
 [licenses]
-allow = ["MIT", "Unicode-DFS-2016"]
+allow = ["MIT"]
 
 [licenses.private]
 ignore = true
