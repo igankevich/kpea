@@ -19,13 +19,13 @@ normalize-path = "0.2.1"
 [dev-dependencies]
 arbitrary = { version = "1.4.1", features = ["derive", "derive_arbitrary"] }
 arbtest = "0.3.1"
-cpio-test = { path = "cpio-test" }
+random-dir = { path = "random-dir" }
 similar-asserts = "1.6.0"
 tempfile = "3.14.0"
 walkdir = "2.5.0"
 
 [workspace]
-members = [".", "cli", "cpio-test"]
+members = [".", "cli", "random-dir"]
 default-members = [".", "cli"]
 
 [lints.clippy]
@@ -38,4 +38,4 @@ missing_docs = "warn"
 
 [workspace.package]
 license = "MIT"
-version = "0.2.0"
+version = "0.2.1"

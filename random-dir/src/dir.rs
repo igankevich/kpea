@@ -4,7 +4,6 @@ use std::ffi::OsString;
 use std::fs::create_dir_all;
 use std::fs::hard_link;
 use std::fs::read_link;
-use std::fs::DirBuilder;
 use std::fs::File;
 use std::fs::Permissions;
 use std::io::Error;
@@ -17,6 +16,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixDatagram;
 use std::path::Path;
 use std::path::PathBuf;
+use std::path::MAIN_SEPARATOR_STR;
 use std::time::Duration;
 use std::time::SystemTime;
 
@@ -32,32 +32,62 @@ use crate::mknod;
 use crate::path_to_c_string;
 use crate::set_file_modified_time;
 
-pub struct DirectoryOfFiles {
-    #[allow(dead_code)]
-    dir: TempDir,
+pub struct DirBuilder {
+    printable_names: bool,
+    file_types: Vec<FileType>,
 }
 
-impl DirectoryOfFiles {
-    pub fn path(&self) -> &Path {
-        self.dir.path()
+impl DirBuilder {
+    /// Create new directory builder with default parameters.
+    pub fn new() -> Self {
+        Self {
+            printable_names: false,
+            file_types: ALL_FILE_TYPES.into(),
+        }
     }
-}
 
-impl<'a> Arbitrary<'a> for DirectoryOfFiles {
-    fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
-        use FileKind::*;
+    /// Generate files with printable names, i.e. names consisting only from printable characters.
+    ///
+    /// Useful to test CLI applications.
+    pub fn printable_names(mut self, value: bool) -> Self {
+        self.printable_names = value;
+        self
+    }
+
+    /// Which file types to generate?
+    ///
+    /// By default any Unix file type can be generated.
+    pub fn file_types<I>(mut self, file_types: I) -> Self
+    where
+        I: IntoIterator<Item = FileType>,
+    {
+        self.file_types = file_types.into_iter().collect();
+        self
+    }
+
+    pub fn create(self, u: &mut Unstructured<'_>) -> arbitrary::Result<Dir> {
+        use FileType::*;
         let dir = TempDir::new().unwrap();
         let mut files = Vec::new();
         let num_files: usize = u.int_in_range(0..=10)?;
         for _ in 0..num_files {
-            let path: CString = u.arbitrary()?;
+            let path: CString = if self.printable_names {
+                let len: usize = u.int_in_range(1..=10)?;
+                let mut string = String::with_capacity(len);
+                for _ in 0..len {
+                    string.push(u.int_in_range(b'a'..=b'z')? as char);
+                }
+                CString::new(string).unwrap()
+            } else {
+                u.arbitrary()?
+            };
             if path.as_bytes().is_empty() {
                 // do not allow empty paths
                 continue;
             }
             let path: OsString = OsString::from_vec(path.into_bytes());
             let path: PathBuf = path.into();
-            let path = match path.strip_prefix("/") {
+            let path = match path.strip_prefix(MAIN_SEPARATOR_STR) {
                 Ok(path) => path,
                 Err(_) => path.as_path(),
             };
@@ -67,8 +97,8 @@ impl<'a> Arbitrary<'a> for DirectoryOfFiles {
                 continue;
             }
             create_dir_all(path.parent().unwrap()).unwrap();
-            let mut kind: FileKind = u.arbitrary()?;
-            if matches!(kind, FileKind::HardLink | FileKind::Symlink) && files.is_empty() {
+            let mut kind: FileType = *u.choose(&self.file_types[..])?;
+            if matches!(kind, FileType::HardLink | FileType::Symlink) && files.is_empty() {
                 kind = Regular;
             }
             let t = {
@@ -91,7 +121,7 @@ impl<'a> Arbitrary<'a> for DirectoryOfFiles {
                 }
                 Directory => {
                     let mode = u.int_in_range(0o500..=0o777)?;
-                    DirBuilder::new()
+                    std::fs::DirBuilder::new()
                         .mode(mode)
                         .recursive(true)
                         .create(&path)
@@ -140,16 +170,45 @@ impl<'a> Arbitrary<'a> for DirectoryOfFiles {
                     );
                 }
             }
-            if kind != FileKind::Directory {
+            if kind != FileType::Directory {
                 files.push(path.clone());
             }
         }
-        Ok(Self { dir })
+        Ok(Dir { dir })
     }
 }
 
-#[derive(Arbitrary, Debug, PartialEq, Eq)]
-enum FileKind {
+impl Default for DirBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Directory with randomly generated contents.
+///
+/// Automatically Deleted on drop.
+pub struct Dir {
+    dir: TempDir,
+}
+
+impl Dir {
+    pub fn path(&self) -> &Path {
+        self.dir.path()
+    }
+
+    pub fn into_inner(self) -> TempDir {
+        self.dir
+    }
+}
+
+impl<'a> Arbitrary<'a> for Dir {
+    fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
+        DirBuilder::new().create(u)
+    }
+}
+
+#[derive(Arbitrary, Debug, PartialEq, Eq, Clone, Copy)]
+pub enum FileType {
     Regular,
     Directory,
     Fifo,
@@ -159,6 +218,20 @@ enum FileKind {
     Symlink,
     HardLink,
 }
+
+const ALL_FILE_TYPES: [FileType; 8] = {
+    use FileType::*;
+    [
+        Regular,
+        Directory,
+        Fifo,
+        Socket,
+        BlockDevice,
+        CharDevice,
+        Symlink,
+        HardLink,
+    ]
+};
 
 pub fn list_dir_all<P: AsRef<Path>>(dir: P) -> Result<Vec<FileInfo>, Error> {
     let dir = dir.as_ref();
