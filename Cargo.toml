@@ -19,14 +19,21 @@ normalize-path = "0.2.1"
 [dev-dependencies]
 arbitrary = { version = "1.4.1", features = ["derive", "derive_arbitrary"] }
 arbtest = "0.3.1"
-random-dir = { path = "random-dir" }
+random-dir.workspace = true
 similar-asserts = "1.6.0"
 tempfile = "3.14.0"
 walkdir = "2.5.0"
 
 [workspace]
-members = [".", "cli", "random-dir"]
+members = [".", "cli"]
 default-members = [".", "cli"]
+
+[workspace.package]
+license = "MIT"
+version = "0.2.4"
+
+[workspace.dependencies]
+random-dir = "0.2.4"
 
 [lints.clippy]
 unwrap_used = "deny"
@@ -35,7 +42,3 @@ panic = "deny"
 
 [lints.rust]
 missing_docs = "warn"
-
-[workspace.package]
-license = "MIT"
-version = "0.2.3"
