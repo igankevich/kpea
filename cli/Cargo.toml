@@ -11,11 +11,11 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "4.5.20", features = ["derive"] }
 cpio = { package = "kpea", path = ".." }
-similar-asserts = "1.6.0"
 
 [dev-dependencies]
-arbtest = "0.3.1"
+arbtest = "0.3.2"
 random-dir.workspace = true
-tempfile = "3.14.0"
-test_bin = "0.4.0"
+similar-asserts = "1.7.0"
+tempfile = "3.24.0"
+test_bin = "0.5.0"
 walkdir = "2.5.0"

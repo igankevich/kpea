@@ -15,7 +15,6 @@ use arbtest::arbtest;
 use random_dir::list_dir_all;
 use random_dir::Dir;
 use tempfile::TempDir;
-use test_bin::get_test_bin;
 use walkdir::WalkDir;
 
 const OUR_FORMATS: [&str; 5] = ["newc", "crc", "odc", "bin-le", "bin-be"];
@@ -25,7 +24,7 @@ const THEIR_FORMATS: [&str; 4] = ["newc", "crc", "odc", "bin"];
 #[cfg_attr(any(miri, not(target_os = "linux")), ignore)]
 fn our_copy_out_their_copy_in() {
     copy_out_copy_in(
-        || get_test_bin("cpio"),
+        || test_bin::get_test_bin!("cpio"),
         || Command::new("cpio"),
         false,
         &OUR_FORMATS,
@@ -37,7 +36,7 @@ fn our_copy_out_their_copy_in() {
 fn their_copy_out_our_copy_in() {
     copy_out_copy_in(
         || Command::new("cpio"),
-        || get_test_bin("cpio"),
+        || test_bin::get_test_bin!("cpio"),
         true,
         &THEIR_FORMATS,
     );
@@ -47,8 +46,8 @@ fn their_copy_out_our_copy_in() {
 #[cfg_attr(any(miri, not(target_os = "linux")), ignore)]
 fn our_copy_out_our_copy_in() {
     copy_out_copy_in(
-        || get_test_bin("cpio"),
-        || get_test_bin("cpio"),
+        || test_bin::get_test_bin!("cpio"),
+        || test_bin::get_test_bin!("cpio"),
         true,
         &OUR_FORMATS,
     );
@@ -68,19 +67,31 @@ fn their_copy_out_their_copy_in() {
 #[test]
 #[cfg_attr(any(miri, not(target_os = "linux")), ignore)]
 fn their_copy_out_our_verify_crc() {
-    only_verify_crc(|| Command::new("cpio"), || get_test_bin("cpio"), false);
+    only_verify_crc(
+        || Command::new("cpio"),
+        || test_bin::get_test_bin!("cpio"),
+        false,
+    );
 }
 
 #[test]
 #[cfg_attr(any(miri, not(target_os = "linux")), ignore)]
 fn our_copy_out_their_verify_crc() {
-    only_verify_crc(|| get_test_bin("cpio"), || Command::new("cpio"), false);
+    only_verify_crc(
+        || test_bin::get_test_bin!("cpio"),
+        || Command::new("cpio"),
+        false,
+    );
 }
 
 #[test]
 #[cfg_attr(any(miri, not(target_os = "linux")), ignore)]
 fn our_copy_out_our_verify_crc() {
-    only_verify_crc(|| get_test_bin("cpio"), || get_test_bin("cpio"), true);
+    only_verify_crc(
+        || test_bin::get_test_bin!("cpio"),
+        || test_bin::get_test_bin!("cpio"),
+        true,
+    );
 }
 
 #[test]
