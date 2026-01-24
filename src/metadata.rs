@@ -257,10 +257,10 @@ impl Metadata {
 
     fn write_bin<W: Write>(&self, mut writer: W, byte_order: ByteOrder) -> Result<(), Error> {
         fn dev64_to_dev16(dev: u64) -> Result<u16, Error> {
-            let major: u8 = unsafe { major(dev as _) }
+            let major: u8 = major(dev as _)
                 .try_into()
                 .map_err(|_| ErrorKind::InvalidData)?;
-            let minor: u8 = unsafe { minor(dev as _) }
+            let minor: u8 = minor(dev as _)
                 .try_into()
                 .map_err(|_| ErrorKind::InvalidData)?;
             let dev = ((major as u16) << 8) | (minor as u16);
@@ -422,10 +422,10 @@ impl Metadata {
                 .try_into()
                 .map_err(|_| ErrorKind::InvalidData)?,
         )?;
-        write_hex_8(writer.by_ref(), unsafe { major(self.dev as _) } as _)?;
-        write_hex_8(writer.by_ref(), unsafe { minor(self.dev as _) } as _)?;
-        write_hex_8(writer.by_ref(), unsafe { major(self.rdev as _) } as _)?;
-        write_hex_8(writer.by_ref(), unsafe { minor(self.rdev as _) } as _)?;
+        write_hex_8(writer.by_ref(), major(self.dev as _) as _)?;
+        write_hex_8(writer.by_ref(), minor(self.dev as _) as _)?;
+        write_hex_8(writer.by_ref(), major(self.rdev as _) as _)?;
+        write_hex_8(writer.by_ref(), minor(self.rdev as _) as _)?;
         write_hex_8(writer.by_ref(), self.name_len)?;
         write_hex_8(writer.by_ref(), self.check)?;
         Ok(())

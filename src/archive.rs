@@ -262,7 +262,7 @@ impl<R: Read> Archive<R> {
     /// Read the next entry from the archive.
     ///
     /// Returns `Ok(None)` when the end of the archive is reached.
-    pub fn read_entry(&mut self) -> Result<Option<Entry<R>>, Error> {
+    pub fn read_entry(&mut self) -> Result<Option<Entry<'_, R>>, Error> {
         fn read_and_verify_crc(reader: &mut impl Read, check: u32) -> Result<Vec<u8>, Error> {
             let mut crc_writer = CrcWriter::new(Vec::new());
             std::io::copy(reader, &mut crc_writer)?;

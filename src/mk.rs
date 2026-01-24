@@ -39,7 +39,7 @@ pub fn set_file_modified_time(path: &CStr, t: SystemTime) -> Result<(), Error> {
             tv_nsec: UTIME_OMIT,
         },
         libc::timespec {
-            tv_sec: d.as_secs() as libc::time_t,
+            tv_sec: d.as_secs() as _,
             tv_nsec: d.subsec_nanos() as libc::c_long,
         },
     ];
