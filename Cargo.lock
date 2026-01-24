@@ -151,20 +151,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cpio-cli"
-version = "0.2.5"
-dependencies = [
- "arbtest",
- "clap",
- "kpea",
- "random-dir",
- "similar-asserts",
- "tempfile",
- "test_bin",
- "walkdir",
-]
-
-[[package]]
 name = "derive_arbitrary"
 version = "1.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -232,6 +218,20 @@ dependencies = [
  "random-dir",
  "similar-asserts",
  "tempfile",
+ "walkdir",
+]
+
+[[package]]
+name = "kpea-cli"
+version = "0.2.5"
+dependencies = [
+ "arbtest",
+ "clap",
+ "kpea",
+ "random-dir",
+ "similar-asserts",
+ "tempfile",
+ "test_bin",
  "walkdir",
 ]
 

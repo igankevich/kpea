@@ -24,7 +24,7 @@ const THEIR_FORMATS: [&str; 4] = ["newc", "crc", "odc", "bin"];
 #[cfg_attr(any(miri, not(target_os = "linux")), ignore)]
 fn our_copy_out_their_copy_in() {
     copy_out_copy_in(
-        || test_bin::get_test_bin!("cpio"),
+        || test_bin::get_test_bin!("kpea"),
         || Command::new("cpio"),
         false,
         &OUR_FORMATS,
@@ -36,7 +36,7 @@ fn our_copy_out_their_copy_in() {
 fn their_copy_out_our_copy_in() {
     copy_out_copy_in(
         || Command::new("cpio"),
-        || test_bin::get_test_bin!("cpio"),
+        || test_bin::get_test_bin!("kpea"),
         true,
         &THEIR_FORMATS,
     );
@@ -46,8 +46,8 @@ fn their_copy_out_our_copy_in() {
 #[cfg_attr(any(miri, not(target_os = "linux")), ignore)]
 fn our_copy_out_our_copy_in() {
     copy_out_copy_in(
-        || test_bin::get_test_bin!("cpio"),
-        || test_bin::get_test_bin!("cpio"),
+        || test_bin::get_test_bin!("kpea"),
+        || test_bin::get_test_bin!("kpea"),
         true,
         &OUR_FORMATS,
     );
@@ -69,7 +69,7 @@ fn their_copy_out_their_copy_in() {
 fn their_copy_out_our_verify_crc() {
     only_verify_crc(
         || Command::new("cpio"),
-        || test_bin::get_test_bin!("cpio"),
+        || test_bin::get_test_bin!("kpea"),
         false,
     );
 }
@@ -78,7 +78,7 @@ fn their_copy_out_our_verify_crc() {
 #[cfg_attr(any(miri, not(target_os = "linux")), ignore)]
 fn our_copy_out_their_verify_crc() {
     only_verify_crc(
-        || test_bin::get_test_bin!("cpio"),
+        || test_bin::get_test_bin!("kpea"),
         || Command::new("cpio"),
         false,
     );
@@ -88,8 +88,8 @@ fn our_copy_out_their_verify_crc() {
 #[cfg_attr(any(miri, not(target_os = "linux")), ignore)]
 fn our_copy_out_our_verify_crc() {
     only_verify_crc(
-        || test_bin::get_test_bin!("cpio"),
-        || test_bin::get_test_bin!("cpio"),
+        || test_bin::get_test_bin!("kpea"),
+        || test_bin::get_test_bin!("kpea"),
         true,
     );
 }

@@ -1,16 +1,16 @@
 [package]
-name = "cpio-cli"
+name = "kpea-cli"
 version.workspace = true
 edition = "2021"
 license.workspace = true
 
 [[bin]]
-name = "cpio"
+name = "kpea"
 path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.5.20", features = ["derive"] }
-cpio = { package = "kpea", path = ".." }
+cpio = { workspace = true }
 
 [dev-dependencies]
 arbtest = "0.3.2"

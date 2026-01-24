@@ -34,6 +34,7 @@ version = "0.2.5"
 
 [workspace.dependencies]
 random-dir = "0.2.4"
+cpio = { path = ".", package = "kpea", version = "0.2.5" }
 
 [lints.clippy]
 unwrap_used = "deny"
