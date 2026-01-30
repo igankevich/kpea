@@ -17,8 +17,23 @@ use crate::Metadata;
 use crate::MetadataId;
 use crate::Walk;
 
+/// Modifies metadata read from the file system.
+pub trait EditMetadata {
+    /// Modify metadata obtained from the file system.
+    fn edit_metadata(&mut self, metadata: &mut Metadata) -> Result<(), Error>;
+}
+
+/// Metadata editor that does nothing.
+pub struct DoNotEditMetadata;
+
+impl EditMetadata for DoNotEditMetadata {
+    fn edit_metadata(&mut self, _: &mut Metadata) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
 /// CPIO archive writer.
-pub struct Builder<W: Write> {
+pub struct Builder<W: Write, E: EditMetadata> {
     writer: W,
     max_inode: u32,
     max_dev: u16,
@@ -27,11 +42,24 @@ pub struct Builder<W: Write> {
     inodes: HashMap<MetadataId, (u32, u32)>,
     // Long device ID -> short device ID.
     devices: HashMap<u64, u16>,
+    metadata_editor: E,
 }
 
-impl<W: Write> Builder<W> {
+impl<W: Write> Builder<W, DoNotEditMetadata> {
     /// Create new CPIO archive writer using the underlying `writer`.
     pub fn new(writer: W) -> Self {
+        Self::with_metadata_editor(writer, DoNotEditMetadata)
+    }
+}
+
+impl<W: Write, E: EditMetadata> Builder<W, E> {
+    /// Create new CPIO archive writer using the underlying `writer` and supplied metadata editor.
+    ///
+    /// [`edit_metadata`](EditMetadata::edit_metadata) is called
+    /// for each entry right before writing it to the output stream.
+    ///
+    /// Use [`DoNotEditMetadata`] to not modify entries' metadata.
+    pub fn with_metadata_editor(writer: W, metadata_editor: E) -> Self {
         Self {
             writer,
             max_inode: 0,
@@ -39,6 +67,7 @@ impl<W: Write> Builder<W> {
             format: Format::Newc,
             inodes: Default::default(),
             devices: Default::default(),
+            metadata_editor,
         }
     }
 
@@ -73,6 +102,7 @@ impl<W: Write> Builder<W> {
         } else {
             Vec::new()
         };
+        self.metadata_editor.edit_metadata(&mut metadata)?;
         metadata.write(self.writer.by_ref(), self.format)?;
         write_path(self.writer.by_ref(), inner_path.as_ref(), self.format)?;
         if metadata.file_size != 0 {
@@ -131,8 +161,13 @@ impl<W: Write> Builder<W> {
     }
 
     /// Create an archive from the files in the `directory`.
-    pub fn pack<P: AsRef<Path>>(writer: W, directory: P) -> Result<W, Error> {
-        let mut builder = Self::new(writer);
+    ///
+    /// [`edit_metadata`](EditMetadata::edit_metadata) is called
+    /// for each entry right before writing it to the output stream.
+    ///
+    /// Use [`DoNotEditMetadata`] to not modify entries' metadata.
+    pub fn pack<P: AsRef<Path>>(writer: W, metadata_editor: E, directory: P) -> Result<W, Error> {
+        let mut builder = Self::with_metadata_editor(writer, metadata_editor);
         builder.append_dir_all(directory)?;
         builder.finish()
     }
