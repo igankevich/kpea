@@ -209,7 +209,7 @@ checksum = "7943c866cc5cd64cbc25b2e01621d07fa8eb2a1a23160ee81ce38704e97b8ecf"
 
 [[package]]
 name = "kpea"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "arbitrary",
  "arbtest",
@@ -223,7 +223,7 @@ dependencies = [
 
 [[package]]
 name = "kpea-cli"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "arbtest",
  "clap",

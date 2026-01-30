@@ -462,6 +462,7 @@ mod tests {
 
     use super::*;
     use crate::Builder;
+    use crate::DoNotEditMetadata;
 
     #[test]
     #[cfg_attr(miri, ignore)]
@@ -533,7 +534,12 @@ mod tests {
         arbtest(|u| {
             let directory: Dir = u.arbitrary()?;
             let cpio_path = workdir.path().join("test.cpio");
-            Builder::pack(File::create(&cpio_path).unwrap(), directory.path()).unwrap();
+            Builder::pack(
+                File::create(&cpio_path).unwrap(),
+                DoNotEditMetadata,
+                directory.path(),
+            )
+            .unwrap();
             let unpack_dir = workdir.path().join("unpacked");
             remove_dir_all(&unpack_dir).ok();
             let reader = File::open(&cpio_path).unwrap();
