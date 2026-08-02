@@ -33,7 +33,7 @@ license = "MIT"
 version = "0.4.0"
 
 [workspace.dependencies]
-random-dir = { version = "0.3.1", git = "https://github.com/igankevich/random-dir", rev = "3b0e09ab939e1479d54d255bb5cf63b2a96a535f" }
+random-dir = "0.3.2"
 cpio = { path = ".", package = "kpea", version = "0.4.0" }
 
 [lints.clippy]
