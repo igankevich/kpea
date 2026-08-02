@@ -15,11 +15,6 @@ use crate::Format;
 pub struct CpioPath(CString);
 
 impl CpioPath {
-    /// Returns `true` if the path is empty.
-    pub fn is_empty(&self) -> bool {
-        self.0.as_bytes().is_empty()
-    }
-
     pub(crate) fn write<W: Write>(&self, mut writer: W, format: Format) -> Result<(), Error> {
         let bytes = self.0.as_bytes_with_nul();
         writer.write_all(bytes)?;
