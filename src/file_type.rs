@@ -63,6 +63,17 @@ pub(crate) fn mode_to_file_type(mode: u32) -> u8 {
     ((mode & FILE_TYPE_MASK) >> 12) as u8
 }
 
+#[cfg(unix)]
+impl TryFrom<&std::fs::Metadata> for FileType {
+    type Error = Error;
+
+    fn try_from(other: &std::fs::Metadata) -> Result<Self, Self::Error> {
+        use std::os::unix::fs::MetadataExt;
+        FileType::new(other.mode())
+    }
+}
+
+#[cfg(not(unix))]
 impl TryFrom<&std::fs::Metadata> for FileType {
     type Error = Error;
 
