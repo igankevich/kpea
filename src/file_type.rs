@@ -45,6 +45,11 @@ impl FileType {
             _ => Err(ErrorKind::InvalidData.into()),
         }
     }
+
+    #[allow(unused)]
+    pub(crate) fn to_mode(self) -> u32 {
+        u32::from(self as u8) << 12
+    }
 }
 
 impl TryFrom<u32> for FileType {
@@ -56,4 +61,21 @@ impl TryFrom<u32> for FileType {
 
 pub(crate) fn mode_to_file_type(mode: u32) -> u8 {
     ((mode & FILE_TYPE_MASK) >> 12) as u8
+}
+
+impl TryFrom<&std::fs::Metadata> for FileType {
+    type Error = Error;
+
+    fn try_from(other: &std::fs::Metadata) -> Result<Self, Self::Error> {
+        if other.is_dir() {
+            return Ok(FileType::Directory);
+        }
+        if other.is_symlink() {
+            return Ok(FileType::Symlink);
+        }
+        if other.is_file() {
+            return Ok(FileType::Regular);
+        }
+        Err(ErrorKind::InvalidData.into())
+    }
 }

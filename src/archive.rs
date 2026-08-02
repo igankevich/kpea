@@ -2,9 +2,7 @@ use std::collections::HashMap;
 use std::fs::create_dir;
 use std::fs::create_dir_all;
 use std::fs::hard_link;
-use std::fs::set_permissions;
 use std::fs::File;
-use std::fs::Permissions;
 use std::io::Error;
 use std::io::ErrorKind;
 use std::io::IoSliceMut;
@@ -96,6 +94,7 @@ impl<R: Read> Archive<R> {
         // inode -> path
         let mut hard_links = HashMap::new();
         let preserve_mtime = self.preserve_mtime;
+        #[allow(unused)]
         let preserve_owner = self.preserve_owner;
         while let Some(mut entry) = self.read_entry()? {
             let path = entry.path.to_path()?;
@@ -125,7 +124,10 @@ impl<R: Read> Archive<R> {
                             let old_mode = path.metadata()?.mode();
                             if !is_writable(old_mode) {
                                 // make writable
-                                set_permissions(&path, Permissions::from_mode(0o644))?;
+                                std::fs::set_permissions(
+                                    &path,
+                                    std::fs::Permissions::from_mode(0o644),
+                                )?;
                             }
                             old_mode
                         };
@@ -137,17 +139,20 @@ impl<R: Read> Archive<R> {
                             }
                         }
                         drop(file);
-                        if preserve_owner {
-                            std::os::unix::fs::lchown(
-                                &path,
-                                Some(entry.metadata.uid),
-                                Some(entry.metadata.gid),
-                            )?;
-                        }
                         #[cfg(unix)]
                         {
+                            if preserve_owner {
+                                std::os::unix::fs::lchown(
+                                    &path,
+                                    Some(entry.metadata.uid),
+                                    Some(entry.metadata.gid),
+                                )?;
+                            }
                             use std::os::unix::fs::PermissionsExt;
-                            set_permissions(&path, Permissions::from_mode(old_mode))?;
+                            std::fs::set_permissions(
+                                &path,
+                                std::fs::Permissions::from_mode(old_mode),
+                            )?;
                         }
                     }
                     continue;
@@ -163,17 +168,19 @@ impl<R: Read> Archive<R> {
                             file.set_modified(modified)?;
                         }
                     }
-                    if preserve_owner {
-                        std::os::unix::fs::lchown(
-                            &path,
-                            Some(entry.metadata.uid),
-                            Some(entry.metadata.gid),
-                        )?;
-                    }
                     #[cfg(unix)]
                     {
+                        if preserve_owner {
+                            std::os::unix::fs::lchown(
+                                &path,
+                                Some(entry.metadata.uid),
+                                Some(entry.metadata.gid),
+                            )?;
+                        }
                         use std::os::unix::fs::PermissionsExt;
-                        file.set_permissions(Permissions::from_mode(entry.metadata.file_mode()))?;
+                        file.set_permissions(std::fs::Permissions::from_mode(
+                            entry.metadata.file_mode(),
+                        ))?;
                     }
                 }
                 FileType::Directory => {
@@ -184,6 +191,7 @@ impl<R: Read> Archive<R> {
                             File::open(&path)?.set_modified(modified)?;
                         }
                     }
+                    #[cfg(unix)]
                     if preserve_owner {
                         std::os::unix::fs::lchown(
                             &path,
@@ -255,12 +263,34 @@ impl<R: Read> Archive<R> {
                         lchown(&path, Some(entry.metadata.uid), Some(entry.metadata.gid))?;
                     }
                 }
+                #[cfg(windows)]
+                FileType::Symlink => {
+                    use std::os::windows::fs::symlink_dir;
+                    use std::os::windows::fs::symlink_file;
+                    let mut original = Vec::new();
+                    entry.reader.read_to_end(&mut original)?;
+                    if let Some(byte) = original.last() {
+                        if *byte != 0 {
+                            original.push(0_u8);
+                        }
+                    }
+                    let original = CpioPath::from_vec_with_nul(original)?;
+                    let original_path = original.to_path()?;
+                    if original_path.is_file() {
+                        symlink_file(&original_path, &path)?;
+                    } else {
+                        symlink_dir(&original_path, &path)?;
+                    }
+                }
+                #[cfg(all(not(unix), not(windows)))]
+                FileType::Symlink => {
+                    // Not supported.
+                }
                 #[cfg(not(unix))]
                 FileType::Fifo
                 | FileType::Socket
                 | FileType::CharDevice
-                | FileType::BlockDevice
-                | FileType::Symlink => {
+                | FileType::BlockDevice => {
                     // Not supported.
                 }
             }
@@ -269,8 +299,8 @@ impl<R: Read> Archive<R> {
         #[cfg(unix)]
         for (path, mode) in dirs.into_iter() {
             use std::os::unix::fs::PermissionsExt;
-            let perms = Permissions::from_mode(mode);
-            set_permissions(&path, perms)?;
+            let perms = std::fs::Permissions::from_mode(mode);
+            std::fs::set_permissions(&path, perms)?;
         }
         Ok(())
     }
@@ -460,6 +490,7 @@ impl<'a, R: Read> Drop for Entry<'a, R> {
     }
 }
 
+#[allow(unused)]
 fn is_writable(mode: u32) -> bool {
     (((mode & FILE_MODE_MASK) >> 8) & FILE_WRITE_BIT) != 0
 }
@@ -471,7 +502,6 @@ mod tests {
     use std::fs::remove_dir_all;
 
     use arbtest::arbtest;
-    use random_dir::list_dir_all;
     use random_dir::Dir;
     use tempfile::TempDir;
     use walkdir::WalkDir;
@@ -535,10 +565,11 @@ mod tests {
             remove_dir_all(&unpack_dir).ok();
             let reader = File::open(&cpio_path).unwrap();
             let mut archive = Archive::new(reader);
-            archive.preserve_mtime(true);
+            let preserve_mtime = !cfg!(windows);
+            archive.preserve_mtime(preserve_mtime);
             archive.unpack(&unpack_dir).unwrap();
-            let files1 = list_dir_all(directory.path()).unwrap();
-            let files2 = list_dir_all(&unpack_dir).unwrap();
+            let files1 = list_dir_all(directory.path(), preserve_mtime);
+            let files2 = list_dir_all(&unpack_dir, preserve_mtime);
             similar_asserts::assert_eq!(files1, files2);
             Ok(())
         });
@@ -561,12 +592,23 @@ mod tests {
             remove_dir_all(&unpack_dir).ok();
             let reader = File::open(&cpio_path).unwrap();
             let mut archive = Archive::new(reader);
-            archive.preserve_mtime(true);
+            let preserve_mtime = !cfg!(windows);
+            archive.preserve_mtime(preserve_mtime);
             archive.unpack(&unpack_dir).unwrap();
-            let files1 = list_dir_all(directory.path()).unwrap();
-            let files2 = list_dir_all(&unpack_dir).unwrap();
+            let files1 = list_dir_all(directory.path(), preserve_mtime);
+            let files2 = list_dir_all(&unpack_dir, preserve_mtime);
             similar_asserts::assert_eq!(files1, files2);
             Ok(())
         });
+    }
+
+    fn list_dir_all(path: &Path, preserve_mtime: bool) -> Vec<random_dir::FileInfo> {
+        let mut files = random_dir::list_dir_all(path).unwrap();
+        if !preserve_mtime {
+            for file in files.iter_mut() {
+                file.metadata.mtime = 0;
+            }
+        }
+        files
     }
 }

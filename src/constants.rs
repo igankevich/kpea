@@ -23,6 +23,7 @@ pub const MAX_8: u32 = 0xffff_ffff_u32;
 pub const FILE_MODE_MASK: u32 = 0o007777;
 #[allow(unused)]
 pub const FILE_READ_BIT: u32 = 0o4;
+#[allow(unused)]
 pub const FILE_WRITE_BIT: u32 = 0o2;
 #[allow(unused)]
 pub const FILE_EXEC_BIT: u32 = 0o1;

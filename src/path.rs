@@ -110,17 +110,18 @@ impl TryFrom<PathBuf> for CpioPath {
     type Error = std::io::Error;
 
     fn try_from(other: PathBuf) -> Result<Self, Self::Error> {
-        let mut bytes = path
+        let mut bytes = other
             .to_str()
             .ok_or_else(|| Error::other("Non-UTF-8 path"))?
             .as_bytes()
             .to_vec();
-        #[cfg(windows)]
-        for b in bytes.iter_mut() {
-            if *b == b'\\' {
-                *b = b'/';
-            }
-        }
+        // TODO
+        //#[cfg(windows)]
+        //for b in bytes.iter_mut() {
+        //    if *b == b'\\' {
+        //        *b = b'/';
+        //    }
+        //}
         bytes.push(0_u8);
         Self::from_vec_with_nul(bytes)
     }
@@ -143,10 +144,10 @@ impl TryFrom<CpioPath> for PathBuf {
     type Error = std::io::Error;
 
     fn try_from(other: CpioPath) -> Result<Self, Self::Error> {
-        let s = other
+        let string = other
             .0
             .into_string()
-            .ok_or_else(|| Error::other("Non-UTF-8 path"))?;
+            .map_err(|_| Error::other("Non-UTF-8 path"))?;
         Ok(PathBuf::from(string))
     }
 }

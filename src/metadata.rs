@@ -5,14 +5,40 @@ use std::io::Write;
 use std::time::Duration;
 use std::time::SystemTime;
 
-use libc::major;
-use libc::makedev;
-use libc::minor;
-
 use crate::constants::*;
 use crate::io::*;
 use crate::mode_to_file_type;
 use crate::FileType;
+
+#[cfg(unix)]
+fn makedev(major: u64, minor: u64) -> u64 {
+    libc::makedev(major as _, minor as _) as _
+}
+
+#[cfg(not(unix))]
+fn makedev(_major: u64, _minor: u64) -> u64 {
+    0
+}
+
+#[cfg(unix)]
+fn major(dev: u64) -> u64 {
+    libc::major(dev) as u64
+}
+
+#[cfg(not(unix))]
+fn major(_dev: u64) -> u64 {
+    0
+}
+
+#[cfg(unix)]
+fn minor(dev: u64) -> u64 {
+    libc::minor(dev) as u64
+}
+
+#[cfg(not(unix))]
+fn minor(_dev: u64) -> u64 {
+    0
+}
 
 /// CPIO archive metadata.
 ///
@@ -240,13 +266,13 @@ impl Metadata {
             }
         }
         Ok(Self {
-            dev: unsafe { makedev(((dev >> 8) & 0xff) as _, (dev & 0xff) as _) } as _,
+            dev: makedev(((dev >> 8) & 0xff) as _, (dev & 0xff) as _),
             ino: ino as u64,
             mode: mode as u32,
             uid: uid as u32,
             gid: gid as u32,
             nlink: nlink as u32,
-            rdev: unsafe { makedev(((majmin >> 8) & 0xff) as _, (majmin & 0xff) as _) } as _,
+            rdev: makedev(((majmin >> 8) & 0xff) as _, (majmin & 0xff) as _),
             mtime: mtime as u64,
             name_len: name_len as u32,
             file_size: file_size as u64,
@@ -256,12 +282,8 @@ impl Metadata {
 
     fn write_bin<W: Write>(&self, mut writer: W, byte_order: ByteOrder) -> Result<(), Error> {
         fn dev64_to_dev16(dev: u64) -> Result<u16, Error> {
-            let major: u8 = major(dev as _)
-                .try_into()
-                .map_err(|_| ErrorKind::InvalidData)?;
-            let minor: u8 = minor(dev as _)
-                .try_into()
-                .map_err(|_| ErrorKind::InvalidData)?;
+            let major: u8 = major(dev).try_into().map_err(|_| ErrorKind::InvalidData)?;
+            let minor: u8 = minor(dev).try_into().map_err(|_| ErrorKind::InvalidData)?;
             let dev = ((major as u16) << 8) | (minor as u16);
             Ok(dev)
         }
@@ -387,13 +409,13 @@ impl Metadata {
         let name_len = read_hex_8(reader.by_ref())?;
         let check = read_hex_8(reader.by_ref())?;
         Ok(Self {
-            dev: unsafe { makedev(dev_major as _, dev_minor as _) } as _,
+            dev: makedev(dev_major as _, dev_minor as _),
             ino: ino as u64,
             mode,
             uid,
             gid,
             nlink,
-            rdev: unsafe { makedev(rdev_major as _, rdev_minor as _) } as _,
+            rdev: makedev(rdev_major as _, rdev_minor as _),
             mtime: mtime as u64,
             name_len,
             file_size: file_size as u64,
@@ -461,7 +483,17 @@ impl TryFrom<&std::fs::Metadata> for Metadata {
         Ok(Self {
             dev: 0,
             ino: 0,
-            mode: if other.is_dir() { 0o755 } else { 0o644 },
+            mode: {
+                let perms = if other.is_dir() {
+                    0o755
+                } else if other.is_symlink() {
+                    0o777
+                } else {
+                    0o644
+                };
+                let file_type = FileType::try_from(other)?;
+                file_type.to_mode() | perms
+            },
             uid: 0,
             gid: 0,
             nlink: 1,
@@ -671,7 +703,7 @@ mod tests {
     fn arbitrary_dev(u: &mut Unstructured<'_>) -> arbitrary::Result<u64> {
         let major: u8 = u.arbitrary()?;
         let minor: u8 = u.arbitrary()?;
-        let dev = unsafe { makedev(major as _, minor as _) } as _;
+        let dev = makedev(major as _, minor as _);
         Ok(dev)
     }
 }
