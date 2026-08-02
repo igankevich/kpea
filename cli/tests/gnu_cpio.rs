@@ -12,7 +12,6 @@ use std::process::Command;
 use std::sync::Once;
 
 use arbtest::arbtest;
-use random_dir::list_dir_all;
 use random_dir::Dir;
 use tempfile::TempDir;
 use walkdir::WalkDir;
@@ -211,8 +210,8 @@ fn copy_out_copy_in<F1, F2>(
         cpio2.current_dir(&unpack_dir);
         let status = cpio2.status().unwrap();
         assert!(status.success());
-        let files1 = list_dir_all(directory.path()).unwrap();
-        let files2 = list_dir_all(&unpack_dir).unwrap();
+        let files1 = list_dir_all(directory.path(), false);
+        let files2 = list_dir_all(&unpack_dir, false);
         similar_asserts::assert_eq!(files1, files2);
         Ok(())
     });
@@ -236,6 +235,16 @@ fn contains_hard_link_to_symlink<P: AsRef<Path>>(dir: P) -> Result<bool, Error> 
 
 fn make_temp_dir() -> TempDir {
     tempfile::Builder::new().rand_bytes(32).tempdir().unwrap()
+}
+
+fn list_dir_all(path: &Path, preserve_mtime: bool) -> Vec<random_dir::FileInfo> {
+    let mut files = random_dir::list_dir_all(path).unwrap();
+    if !preserve_mtime {
+        for file in files.iter_mut() {
+            file.metadata.mtime = 0;
+        }
+    }
+    files
 }
 
 fn do_not_truncate_assertions() {
