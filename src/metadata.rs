@@ -2,7 +2,6 @@ use std::io::Error;
 use std::io::ErrorKind;
 use std::io::Read;
 use std::io::Write;
-use std::os::unix::fs::MetadataExt;
 use std::time::Duration;
 use std::time::SystemTime;
 
@@ -432,9 +431,12 @@ impl Metadata {
     }
 }
 
+#[cfg(unix)]
+#[doc(hidden)]
 impl TryFrom<&std::fs::Metadata> for Metadata {
     type Error = Error;
     fn try_from(other: &std::fs::Metadata) -> Result<Self, Error> {
+        use std::os::unix::fs::MetadataExt;
         Ok(Self {
             dev: other.dev(),
             ino: other.ino(),
@@ -446,6 +448,36 @@ impl TryFrom<&std::fs::Metadata> for Metadata {
             mtime: other.mtime() as u64,
             name_len: 0,
             file_size: other.size(),
+            check: 0,
+        })
+    }
+}
+
+#[cfg(not(unix))]
+#[doc(hidden)]
+impl TryFrom<&std::fs::Metadata> for Metadata {
+    type Error = Error;
+    fn try_from(other: &std::fs::Metadata) -> Result<Self, Error> {
+        Ok(Self {
+            dev: 0,
+            ino: 0,
+            mode: if other.is_dir() { 0o755 } else { 0o644 },
+            uid: 0,
+            gid: 0,
+            nlink: 1,
+            rdev: 0,
+            mtime: other
+                .modified()
+                .ok()
+                .and_then(|modified| {
+                    modified
+                        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                        .ok()
+                })
+                .unwrap_or(std::time::Duration::ZERO)
+                .as_secs(),
+            name_len: 0,
+            file_size: other.len(),
             check: 0,
         })
     }

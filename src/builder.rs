@@ -5,12 +5,12 @@ use std::io::Error;
 use std::io::ErrorKind;
 use std::io::Read;
 use std::io::Write;
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
+use std::path::PathBuf;
 
 use crate::constants::*;
 use crate::io::*;
+use crate::CpioPath;
 use crate::CrcWriter;
 use crate::Format;
 use crate::Metadata;
@@ -43,6 +43,8 @@ pub struct Builder<W: Write, E: EditMetadata> {
     // Long device ID -> short device ID.
     devices: HashMap<u64, u16>,
     metadata_editor: E,
+    #[cfg(not(unix))]
+    inode_counter: u64,
 }
 
 impl<W: Write> Builder<W, DoNotEditMetadata> {
@@ -68,6 +70,8 @@ impl<W: Write, E: EditMetadata> Builder<W, E> {
             inodes: Default::default(),
             devices: Default::default(),
             metadata_editor,
+            #[cfg(not(unix))]
+            inode_counter: 0,
         }
     }
 
@@ -82,13 +86,16 @@ impl<W: Write, E: EditMetadata> Builder<W, E> {
     }
 
     /// Append raw entry.
-    pub fn append_entry<P: AsRef<Path>, R: Read>(
+    pub fn append_entry<R: Read>(
         &mut self,
         mut metadata: Metadata,
-        inner_path: P,
+        inner_path: impl TryInto<CpioPath>,
         mut data: R,
     ) -> Result<Metadata, Error> {
-        let is_hard_link = self.fix_header(&mut metadata, inner_path.as_ref())?;
+        let inner_path: CpioPath = inner_path
+            .try_into()
+            .map_err(|_| Error::other("Invalid path"))?;
+        let is_hard_link = self.fix_header(&mut metadata, &inner_path)?;
         let is_crc = matches!(self.format, Format::Crc) && metadata.is_file() && !is_hard_link;
         let file_contents = if is_crc {
             let mut crc_writer = CrcWriter::new(Vec::new());
@@ -104,7 +111,7 @@ impl<W: Write, E: EditMetadata> Builder<W, E> {
         };
         self.metadata_editor.edit_metadata(&mut metadata)?;
         metadata.write(self.writer.by_ref(), self.format)?;
-        write_path(self.writer.by_ref(), inner_path.as_ref(), self.format)?;
+        inner_path.write(self.writer.by_ref(), self.format)?;
         if metadata.file_size != 0 {
             let n = if is_crc {
                 self.writer.write_all(&file_contents)?;
@@ -121,18 +128,22 @@ impl<W: Write, E: EditMetadata> Builder<W, E> {
     }
 
     /// Append file or directory specified by `path`.
-    pub fn append_path<P1: AsRef<Path>, P2: AsRef<Path>>(
+    pub fn append_path<P: AsRef<Path>>(
         &mut self,
-        path: P1,
-        inner_path: P2,
+        path: P,
+        inner_path: impl TryInto<CpioPath>,
     ) -> Result<(Metadata, std::fs::Metadata), Error> {
         let path = path.as_ref();
         let fs_metadata = path.symlink_metadata()?;
         let mut cpio_metadata: Metadata = (&fs_metadata).try_into()?;
+        #[cfg(not(unix))]
+        {
+            cpio_metadata.ino = self.inode_counter;
+            self.inode_counter += 1;
+        }
         let cpio_metadata = if fs_metadata.is_symlink() {
             let target = read_link(path)?;
-            let mut target = target.into_os_string().into_vec();
-            target.push(0_u8);
+            let target = path_to_c_string_bytes(target)?;
             cpio_metadata.file_size = target.len() as u64;
             self.append_entry(cpio_metadata, inner_path, &target[..])?
         } else if fs_metadata.is_file() {
@@ -210,10 +221,10 @@ impl<W: Write, E: EditMetadata> Builder<W, E> {
         Ok(())
     }
 
-    fn fix_header(&mut self, metadata: &mut Metadata, name: &Path) -> Result<bool, Error> {
+    fn fix_header(&mut self, metadata: &mut Metadata, name: &CpioPath) -> Result<bool, Error> {
         self.remap_device_id(metadata);
         let is_hard_link = self.remap_inode(metadata);
-        let name_len = name.as_os_str().as_bytes().len();
+        let name_len = name.len();
         let max = match self.format {
             Format::Newc | Format::Crc => MAX_8,
             Format::Odc => MAX_6,
@@ -275,4 +286,23 @@ impl<W: Write, E: EditMetadata> Builder<W, E> {
         metadata.ino = inode as u64;
         is_hard_link
     }
+}
+
+#[cfg(unix)]
+fn path_to_c_string_bytes(path: PathBuf) -> Result<Vec<u8>, Error> {
+    use std::os::unix::ffi::OsStringExt;
+    let mut bytes = path.into_os_string().into_vec();
+    bytes.push(0_u8);
+    Ok(bytes)
+}
+
+#[cfg(not(unix))]
+fn path_to_c_string_bytes(path: PathBuf) -> Result<Vec<u8>, Error> {
+    let mut bytes = path
+        .to_str()
+        .ok_or_else(|| Error::other("Non-UTF-8 path"))?
+        .as_bytes()
+        .to_vec();
+    bytes.push(0_u8);
+    Ok(bytes)
 }

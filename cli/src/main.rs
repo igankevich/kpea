@@ -1,10 +1,7 @@
-use std::ffi::OsString;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Error;
-use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
-use std::path::PathBuf;
 use std::process::ExitCode;
 use std::str::FromStr;
 
@@ -45,11 +42,12 @@ fn copy_out(args: Args) -> Result<(), Error> {
         if line.is_empty() {
             break;
         }
-        let line = OsString::from_vec(line);
-        let path: PathBuf = line.into();
+        line.push(0_u8);
+        let cpio_path = cpio::Path::from_vec_with_nul(line)?;
+        let outer_path = cpio_path.to_path()?;
         builder
-            .append_path(&path, &path)
-            .map_err(|e| Error::other(format!("failed to process {:?}: {}", path, e)))?;
+            .append_path(&outer_path, cpio_path.clone())
+            .map_err(|e| Error::other(format!("failed to process {outer_path:?}: {e}")))?;
     }
     builder.finish()?;
     Ok(())
@@ -70,7 +68,7 @@ fn copy_in(args: Args) -> Result<(), Error> {
 fn list_contents() -> Result<(), Error> {
     let mut archive = Archive::new(std::io::stdin());
     while let Some(entry) = archive.read_entry()? {
-        println!("{}", entry.path.display());
+        println!("{}", entry.path);
     }
     Ok(())
 }
