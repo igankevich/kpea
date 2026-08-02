@@ -22,7 +22,7 @@ fn makedev(_major: u64, _minor: u64) -> u64 {
 
 #[cfg(unix)]
 fn major(dev: u64) -> u64 {
-    libc::major(dev) as u64
+    libc::major(dev as _) as u64
 }
 
 #[cfg(not(unix))]
@@ -32,7 +32,7 @@ fn major(_dev: u64) -> u64 {
 
 #[cfg(unix)]
 fn minor(dev: u64) -> u64 {
-    libc::minor(dev) as u64
+    libc::minor(dev as _) as u64
 }
 
 #[cfg(not(unix))]
