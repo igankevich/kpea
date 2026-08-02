@@ -115,13 +115,12 @@ impl TryFrom<PathBuf> for CpioPath {
             .ok_or_else(|| Error::other("Non-UTF-8 path"))?
             .as_bytes()
             .to_vec();
-        // TODO
-        //#[cfg(windows)]
-        //for b in bytes.iter_mut() {
-        //    if *b == b'\\' {
-        //        *b = b'/';
-        //    }
-        //}
+        #[cfg(windows)]
+        for b in bytes.iter_mut() {
+            if *b == b'\\' {
+                *b = b'/';
+            }
+        }
         bytes.push(0_u8);
         Self::from_vec_with_nul(bytes)
     }

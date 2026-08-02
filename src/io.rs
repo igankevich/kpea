@@ -3,8 +3,6 @@ use std::io::Error;
 use std::io::ErrorKind;
 use std::io::Read;
 use std::io::Write;
-// TODO
-//use std::os::unix::ffi::OsStrExt;
 use std::str::from_utf8;
 
 use crate::constants::*;

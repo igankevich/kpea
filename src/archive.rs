@@ -533,7 +533,7 @@ mod tests {
                 let (cpio_metadata, metadata) = builder
                     .append_path(entry.path(), entry_path.clone())
                     .unwrap();
-                expected_headers.push((entry_path, cpio_metadata));
+                expected_headers.push((CpioPath::try_from(entry_path).unwrap(), cpio_metadata));
                 let contents = if metadata.is_file() {
                     std::fs::read(entry.path()).unwrap()
                 } else if metadata.is_symlink() {
@@ -552,10 +552,7 @@ mod tests {
             while let Some(mut entry) = archive.read_entry().unwrap() {
                 let mut contents = Vec::new();
                 entry.reader.read_to_end(&mut contents).unwrap();
-                actual_headers.push((
-                    entry.path.to_path().unwrap().to_path_buf(),
-                    entry.metadata.clone(),
-                ));
+                actual_headers.push((entry.path.clone(), entry.metadata.clone()));
                 actual_files.push(contents);
             }
             assert_eq!(expected_headers, actual_headers);
