@@ -6,7 +6,6 @@ use std::io::ErrorKind;
 use std::io::Read;
 use std::io::Write;
 use std::path::Path;
-use std::path::PathBuf;
 
 use crate::constants::*;
 use crate::io::*;
@@ -143,9 +142,9 @@ impl<W: Write, E: EditMetadata> Builder<W, E> {
         }
         let cpio_metadata = if fs_metadata.is_symlink() {
             let target = read_link(path)?;
-            let target = path_to_c_string_bytes(target)?;
-            cpio_metadata.file_size = target.len() as u64;
-            self.append_entry(cpio_metadata, inner_path, &target[..])?
+            let target = CpioPath::try_from(target)?;
+            cpio_metadata.file_size = target.as_bytes_with_nul().len() as u64;
+            self.append_entry(cpio_metadata, inner_path, target.as_bytes_with_nul())?
         } else if fs_metadata.is_file() {
             self.append_entry(cpio_metadata, inner_path, File::open(path)?)?
         } else {
@@ -224,18 +223,16 @@ impl<W: Write, E: EditMetadata> Builder<W, E> {
     fn fix_header(&mut self, metadata: &mut Metadata, name: &CpioPath) -> Result<bool, Error> {
         self.remap_device_id(metadata);
         let is_hard_link = self.remap_inode(metadata);
-        let name_len = name.len();
+        let name_len = name.as_bytes_with_nul().len();
         let max = match self.format {
             Format::Newc | Format::Crc => MAX_8,
             Format::Odc => MAX_6,
             Format::Bin(..) => u16::MAX as u32,
         };
-        // -1 due to null byte
-        if name_len > max as usize - 1 {
+        if name_len > max as usize {
             return Err(ErrorKind::InvalidData.into());
         }
-        // +1 due to null byte
-        metadata.name_len = (name_len + 1) as u32;
+        metadata.name_len = name_len as u32;
         Ok(is_hard_link)
     }
 
@@ -286,23 +283,4 @@ impl<W: Write, E: EditMetadata> Builder<W, E> {
         metadata.ino = inode as u64;
         is_hard_link
     }
-}
-
-#[cfg(unix)]
-fn path_to_c_string_bytes(path: PathBuf) -> Result<Vec<u8>, Error> {
-    use std::os::unix::ffi::OsStringExt;
-    let mut bytes = path.into_os_string().into_vec();
-    bytes.push(0_u8);
-    Ok(bytes)
-}
-
-#[cfg(not(unix))]
-fn path_to_c_string_bytes(path: PathBuf) -> Result<Vec<u8>, Error> {
-    let mut bytes = path
-        .to_str()
-        .ok_or_else(|| Error::other("Non-UTF-8 path"))?
-        .as_bytes()
-        .to_vec();
-    bytes.push(0_u8);
-    Ok(bytes)
 }

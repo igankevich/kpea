@@ -20,11 +20,6 @@ impl CpioPath {
         self.0.as_bytes().is_empty()
     }
 
-    /// Returns the length of the path _without_ terminating NUL byte.
-    pub fn len(&self) -> usize {
-        self.0.as_bytes().len()
-    }
-
     pub(crate) fn write<W: Write>(&self, mut writer: W, format: Format) -> Result<(), Error> {
         let bytes = self.0.as_bytes_with_nul();
         writer.write_all(bytes)?;
@@ -42,6 +37,11 @@ impl CpioPath {
     /// Returns the underlying bytes representing the path _without_ terminating NUL byte.
     pub fn as_bytes(&self) -> &[u8] {
         self.0.as_bytes()
+    }
+
+    /// Returns the underlying bytes representing the path _with_ terminating NUL byte.
+    pub fn as_bytes_with_nul(&self) -> &[u8] {
+        self.0.as_bytes_with_nul()
     }
 
     /// Converts CPIO path to OS-specific path.
