@@ -502,6 +502,7 @@ mod tests {
     use std::fs::remove_dir_all;
 
     use arbtest::arbtest;
+    use random_dir::list_dir_all;
     use random_dir::Dir;
     use tempfile::TempDir;
     use walkdir::WalkDir;
@@ -562,11 +563,10 @@ mod tests {
             remove_dir_all(&unpack_dir).ok();
             let reader = File::open(&cpio_path).unwrap();
             let mut archive = Archive::new(reader);
-            let preserve_mtime = !cfg!(windows);
-            archive.preserve_mtime(preserve_mtime);
+            archive.preserve_mtime(false);
             archive.unpack(&unpack_dir).unwrap();
-            let files1 = list_dir_all(directory.path(), preserve_mtime);
-            let files2 = list_dir_all(&unpack_dir, preserve_mtime);
+            let files1 = list_dir_all(directory.path()).unwrap();
+            let files2 = list_dir_all(&unpack_dir).unwrap();
             similar_asserts::assert_eq!(files1, files2);
             Ok(())
         });
@@ -589,23 +589,12 @@ mod tests {
             remove_dir_all(&unpack_dir).ok();
             let reader = File::open(&cpio_path).unwrap();
             let mut archive = Archive::new(reader);
-            let preserve_mtime = !cfg!(windows);
-            archive.preserve_mtime(preserve_mtime);
+            archive.preserve_mtime(false);
             archive.unpack(&unpack_dir).unwrap();
-            let files1 = list_dir_all(directory.path(), preserve_mtime);
-            let files2 = list_dir_all(&unpack_dir, preserve_mtime);
+            let files1 = list_dir_all(directory.path()).unwrap();
+            let files2 = list_dir_all(&unpack_dir).unwrap();
             similar_asserts::assert_eq!(files1, files2);
             Ok(())
         });
-    }
-
-    fn list_dir_all(path: &Path, preserve_mtime: bool) -> Vec<random_dir::FileInfo> {
-        let mut files = random_dir::list_dir_all(path).unwrap();
-        if !preserve_mtime {
-            for file in files.iter_mut() {
-                file.metadata.mtime = 0;
-            }
-        }
-        files
     }
 }
