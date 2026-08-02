@@ -105,7 +105,7 @@ where
     F1: FnMut() -> Command,
     F2: FnMut() -> Command,
 {
-    let workdir = TempDir::new().unwrap();
+    let workdir = make_temp_dir();
     let files_txt = workdir.path().join("files.txt");
     let files_cpio = workdir.path().join("files.cpio");
     let unpack_dir = workdir.path().join("unpacked");
@@ -167,7 +167,7 @@ fn copy_out_copy_in<F1, F2>(
     F2: FnMut() -> Command,
 {
     do_not_truncate_assertions();
-    let workdir = TempDir::new().unwrap();
+    let workdir = make_temp_dir();
     let files_txt = workdir.path().join("files.txt");
     let files_cpio = workdir.path().join("files.cpio");
     let unpack_dir = workdir.path().join("unpacked");
@@ -232,6 +232,10 @@ fn contains_hard_link_to_symlink<P: AsRef<Path>>(dir: P) -> Result<bool, Error> 
         }
     }
     Ok(false)
+}
+
+fn make_temp_dir() -> TempDir {
+    tempfile::Builder::new().rand_bytes(32).tempdir().unwrap()
 }
 
 fn do_not_truncate_assertions() {
