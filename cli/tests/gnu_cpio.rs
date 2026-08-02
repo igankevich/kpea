@@ -120,11 +120,7 @@ where
         cpio1.arg("-o");
         remove_dir_all(&unpack_dir).ok();
         create_dir_all(&unpack_dir).unwrap();
-        let directory: Dir = match u.arbitrary() {
-            Ok(dir) => dir,
-            // Workaround for "file already exists" errors.
-            Err(_) => return Ok(()),
-        };
+        let directory: Dir = u.arbitrary()?;
         if !allow_hard_link_to_symlink && contains_hard_link_to_symlink(directory.path()).unwrap() {
             eprintln!("two symlinks with the same inode found: skipping");
             return Ok(());
