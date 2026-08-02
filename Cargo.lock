@@ -209,7 +209,7 @@ checksum = "7943c866cc5cd64cbc25b2e01621d07fa8eb2a1a23160ee81ce38704e97b8ecf"
 
 [[package]]
 name = "kpea"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "arbitrary",
  "arbtest",
@@ -223,7 +223,7 @@ dependencies = [
 
 [[package]]
 name = "kpea-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "arbtest",
  "clap",
@@ -297,9 +297,9 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
 name = "random-dir"
-version = "0.2.4"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f70b50f8c8f0fc6e81733e135a87e73d54c8efb2b3aae769e1f53354f36087c8"
+checksum = "fdc1b4fe9baed06fb446371968725a37c858ff090e677d5c331add540b91bb26"
 dependencies = [
  "arbitrary",
  "arbtest",

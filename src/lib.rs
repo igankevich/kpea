@@ -7,15 +7,21 @@ mod crc;
 mod file_type;
 mod io;
 mod metadata;
+#[cfg(unix)]
 mod mk;
+mod path;
 mod walk;
 
 pub use self::archive::*;
 pub use self::builder::*;
-pub(crate) use self::crc::*;
 pub use self::file_type::*;
 pub use self::metadata::*;
-pub(crate) use self::mk::*;
-pub(crate) use self::walk::*;
+pub use self::path::CpioPath as Path;
+
+use self::crc::*;
+#[cfg(unix)]
+use self::mk::*;
+use self::path::*;
+use self::walk::*;
 
 // TODO fuzz-test against MacOS cpio

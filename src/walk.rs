@@ -2,9 +2,26 @@ use std::collections::VecDeque;
 use std::fs::DirEntry;
 use std::io::Error;
 use std::iter::FusedIterator;
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
+
+trait FileDev {
+    fn dev(&self) -> u64;
+}
+
+#[cfg(unix)]
+impl FileDev for std::fs::Metadata {
+    fn dev(&self) -> u64 {
+        std::os::unix::fs::MetadataExt::dev(self)
+    }
+}
+
+#[cfg(not(unix))]
+impl FileDev for std::fs::Metadata {
+    fn dev(&self) -> u64 {
+        0
+    }
+}
 
 #[derive(Default)]
 pub struct WalkerOptions {

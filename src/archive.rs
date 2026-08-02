@@ -1,37 +1,21 @@
 use std::collections::HashMap;
-use std::ffi::OsString;
 use std::fs::create_dir;
 use std::fs::create_dir_all;
 use std::fs::hard_link;
-use std::fs::set_permissions;
 use std::fs::File;
-use std::fs::Permissions;
 use std::io::Error;
 use std::io::ErrorKind;
 use std::io::IoSliceMut;
 use std::io::Read;
 use std::io::Take;
 use std::io::Write;
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::ffi::OsStringExt;
-use std::os::unix::fs::symlink;
-use std::os::unix::fs::MetadataExt;
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::UnixDatagram;
 use std::path::Path;
-use std::path::PathBuf;
 
-use libc::dev_t;
-use libc::mode_t;
 use normalize_path::NormalizePath;
 
 use crate::constants::*;
 use crate::io::*;
-use crate::lchown;
-use crate::mkfifo;
-use crate::mknod;
-use crate::path_to_c_string;
-use crate::set_file_modified_time;
+use crate::CpioPath;
 use crate::CrcWriter;
 use crate::FileType;
 use crate::Format;
@@ -110,11 +94,13 @@ impl<R: Read> Archive<R> {
         // inode -> path
         let mut hard_links = HashMap::new();
         let preserve_mtime = self.preserve_mtime;
+        #[allow(unused)]
         let preserve_owner = self.preserve_owner;
         while let Some(mut entry) = self.read_entry()? {
-            let path = match entry.path.strip_prefix("/") {
+            let path = entry.path.to_path()?;
+            let path = match path.strip_prefix("/") {
                 Ok(path) => path,
-                Err(_) => entry.path.as_path(),
+                Err(_) => path.as_path(),
             };
             let path = directory.join(path).normalize();
             if !path.starts_with(&directory) {
@@ -131,11 +117,20 @@ impl<R: Read> Archive<R> {
                     let (original, original_file_size) = o.get();
                     hard_link(original, &path)?;
                     if entry.metadata.is_file() && *original_file_size < entry.metadata.file_size {
-                        let old_mode = path.metadata()?.mode();
-                        if !is_writable(old_mode) {
-                            // make writable
-                            set_permissions(&path, Permissions::from_mode(0o644))?;
-                        }
+                        #[cfg(unix)]
+                        let old_mode = {
+                            use std::os::unix::fs::MetadataExt;
+                            use std::os::unix::fs::PermissionsExt;
+                            let old_mode = path.metadata()?.mode();
+                            if !is_writable(old_mode) {
+                                // make writable
+                                std::fs::set_permissions(
+                                    &path,
+                                    std::fs::Permissions::from_mode(0o644),
+                                )?;
+                            }
+                            old_mode
+                        };
                         let mut file = File::options().write(true).truncate(true).open(&path)?;
                         entry.reader.copy_to(&mut file)?;
                         if preserve_mtime {
@@ -144,14 +139,21 @@ impl<R: Read> Archive<R> {
                             }
                         }
                         drop(file);
-                        if preserve_owner {
-                            std::os::unix::fs::lchown(
+                        #[cfg(unix)]
+                        {
+                            if preserve_owner {
+                                std::os::unix::fs::lchown(
+                                    &path,
+                                    Some(entry.metadata.uid),
+                                    Some(entry.metadata.gid),
+                                )?;
+                            }
+                            use std::os::unix::fs::PermissionsExt;
+                            std::fs::set_permissions(
                                 &path,
-                                Some(entry.metadata.uid),
-                                Some(entry.metadata.gid),
+                                std::fs::Permissions::from_mode(old_mode),
                             )?;
                         }
-                        set_permissions(&path, Permissions::from_mode(old_mode))?;
                     }
                     continue;
                 }
@@ -166,14 +168,20 @@ impl<R: Read> Archive<R> {
                             file.set_modified(modified)?;
                         }
                     }
-                    if preserve_owner {
-                        std::os::unix::fs::lchown(
-                            &path,
-                            Some(entry.metadata.uid),
-                            Some(entry.metadata.gid),
-                        )?;
+                    #[cfg(unix)]
+                    {
+                        if preserve_owner {
+                            std::os::unix::fs::lchown(
+                                &path,
+                                Some(entry.metadata.uid),
+                                Some(entry.metadata.gid),
+                            )?;
+                        }
+                        use std::os::unix::fs::PermissionsExt;
+                        file.set_permissions(std::fs::Permissions::from_mode(
+                            entry.metadata.file_mode(),
+                        ))?;
                     }
-                    file.set_permissions(Permissions::from_mode(entry.metadata.file_mode()))?;
                 }
                 FileType::Directory => {
                     // create directory with default permissions
@@ -183,6 +191,7 @@ impl<R: Read> Archive<R> {
                             File::open(&path)?.set_modified(modified)?;
                         }
                     }
+                    #[cfg(unix)]
                     if preserve_owner {
                         std::os::unix::fs::lchown(
                             &path,
@@ -193,68 +202,105 @@ impl<R: Read> Archive<R> {
                     // apply proper permissions later when we have written all other files
                     dirs.push((path, entry.metadata.file_mode()));
                 }
+                #[cfg(unix)]
                 FileType::Fifo => {
-                    let path = path_to_c_string(path)?;
-                    mkfifo(&path, entry.metadata.mode as mode_t)?;
+                    let path = crate::path_to_c_string(path)?;
+                    crate::mkfifo(&path, entry.metadata.mode as libc::mode_t)?;
                     if preserve_mtime {
                         if let Ok(modified) = entry.metadata.modified() {
-                            set_file_modified_time(&path, modified)?;
+                            crate::set_file_modified_time(&path, modified)?;
                         }
                     }
                     if preserve_owner {
-                        lchown(&path, entry.metadata.uid, entry.metadata.gid)?;
+                        crate::lchown(&path, entry.metadata.uid, entry.metadata.gid)?;
                     }
                 }
+                #[cfg(unix)]
                 FileType::Socket => {
+                    use std::os::unix::net::UnixDatagram;
                     UnixDatagram::bind(&path)?;
-                    let path = path_to_c_string(path)?;
+                    let path = crate::path_to_c_string(path)?;
                     if preserve_mtime {
                         if let Ok(modified) = entry.metadata.modified() {
-                            set_file_modified_time(&path, modified)?;
+                            crate::set_file_modified_time(&path, modified)?;
                         }
                     }
                     if preserve_owner {
-                        lchown(&path, entry.metadata.uid, entry.metadata.gid)?;
+                        crate::lchown(&path, entry.metadata.uid, entry.metadata.gid)?;
                     }
                 }
+                #[cfg(unix)]
                 FileType::BlockDevice | FileType::CharDevice => {
-                    let path = path_to_c_string(path)?;
-                    mknod(
+                    let path = crate::path_to_c_string(path)?;
+                    crate::mknod(
                         &path,
-                        entry.metadata.mode as mode_t,
-                        entry.metadata.rdev() as dev_t,
+                        entry.metadata.mode as libc::mode_t,
+                        entry.metadata.rdev() as libc::dev_t,
                     )?;
                     if preserve_mtime {
                         if let Ok(modified) = entry.metadata.modified() {
-                            set_file_modified_time(&path, modified)?;
+                            crate::set_file_modified_time(&path, modified)?;
                         }
                     }
                     if preserve_owner {
-                        lchown(&path, entry.metadata.uid, entry.metadata.gid)?;
+                        crate::lchown(&path, entry.metadata.uid, entry.metadata.gid)?;
                     }
                 }
+                #[cfg(unix)]
                 FileType::Symlink => {
+                    use std::os::unix::fs::lchown;
+                    use std::os::unix::fs::symlink;
                     let mut original = Vec::new();
                     entry.reader.read_to_end(&mut original)?;
-                    if let Some(0) = original.last() {
-                        original.pop();
+                    if let Some(byte) = original.last() {
+                        if *byte != 0 {
+                            original.push(0_u8);
+                        }
                     }
-                    let original: PathBuf = OsString::from_vec(original).into();
-                    symlink(original, &path)?;
+                    let original = CpioPath::from_vec_with_nul(original)?;
+                    symlink(original.to_path()?, &path)?;
                     if preserve_owner {
-                        std::os::unix::fs::lchown(
-                            &path,
-                            Some(entry.metadata.uid),
-                            Some(entry.metadata.gid),
-                        )?;
+                        lchown(&path, Some(entry.metadata.uid), Some(entry.metadata.gid))?;
                     }
+                }
+                #[cfg(windows)]
+                FileType::Symlink => {
+                    use std::os::windows::fs::symlink_dir;
+                    use std::os::windows::fs::symlink_file;
+                    let mut original = Vec::new();
+                    entry.reader.read_to_end(&mut original)?;
+                    if let Some(byte) = original.last() {
+                        if *byte != 0 {
+                            original.push(0_u8);
+                        }
+                    }
+                    let original = CpioPath::from_vec_with_nul(original)?;
+                    let original_path = original.to_path()?;
+                    if original_path.is_file() {
+                        symlink_file(&original_path, &path)?;
+                    } else {
+                        symlink_dir(&original_path, &path)?;
+                    }
+                }
+                #[cfg(all(not(unix), not(windows)))]
+                FileType::Symlink => {
+                    // Not supported.
+                }
+                #[cfg(not(unix))]
+                FileType::Fifo
+                | FileType::Socket
+                | FileType::CharDevice
+                | FileType::BlockDevice => {
+                    // Not supported.
                 }
             }
         }
         dirs.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+        #[cfg(unix)]
         for (path, mode) in dirs.into_iter() {
-            let perms = Permissions::from_mode(mode);
-            set_permissions(&path, perms)?;
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(mode);
+            std::fs::set_permissions(&path, perms)?;
         }
         Ok(())
     }
@@ -276,8 +322,8 @@ impl<R: Read> Archive<R> {
         let Some((metadata, format)) = Metadata::read_some(self.reader.by_ref())? else {
             return Ok(None);
         };
-        let path = read_path_buf(self.reader.by_ref(), metadata.name_len as usize, format)?;
-        if path.as_os_str().as_bytes() == TRAILER.to_bytes() {
+        let path = CpioPath::read(self.reader.by_ref(), metadata.name_len as usize, format)?;
+        if path.as_bytes() == TRAILER.to_bytes() {
             return Ok(None);
         }
         let reader = match format {
@@ -431,7 +477,7 @@ pub struct Entry<'a, R: Read> {
     /// File's metadata.
     pub metadata: Metadata,
     /// File path in the archive.
-    pub path: PathBuf,
+    pub path: CpioPath,
     /// Entry reader.
     pub reader: EntryReader<'a, R>,
     /// Entry format.
@@ -444,6 +490,7 @@ impl<'a, R: Read> Drop for Entry<'a, R> {
     }
 }
 
+#[allow(unused)]
 fn is_writable(mode: u32) -> bool {
     (((mode & FILE_MODE_MASK) >> 8) & FILE_WRITE_BIT) != 0
 }
@@ -455,7 +502,6 @@ mod tests {
     use std::fs::remove_dir_all;
 
     use arbtest::arbtest;
-    use random_dir::list_dir_all;
     use random_dir::Dir;
     use tempfile::TempDir;
     use walkdir::WalkDir;
@@ -487,14 +533,12 @@ mod tests {
                 let (cpio_metadata, metadata) = builder
                     .append_path(entry.path(), entry_path.clone())
                     .unwrap();
-                expected_headers.push((entry_path, cpio_metadata));
+                expected_headers.push((CpioPath::try_from(entry_path).unwrap(), cpio_metadata));
                 let contents = if metadata.is_file() {
                     std::fs::read(entry.path()).unwrap()
                 } else if metadata.is_symlink() {
                     let target = read_link(entry.path()).unwrap();
-                    let mut target = target.into_os_string().into_vec();
-                    target.push(0_u8);
-                    target
+                    CpioPath::try_from(target).unwrap().into_bytes_with_nul()
                 } else {
                     Vec::new()
                 };
@@ -518,10 +562,11 @@ mod tests {
             remove_dir_all(&unpack_dir).ok();
             let reader = File::open(&cpio_path).unwrap();
             let mut archive = Archive::new(reader);
-            archive.preserve_mtime(true);
+            let preserve_mtime = false;
+            archive.preserve_mtime(preserve_mtime);
             archive.unpack(&unpack_dir).unwrap();
-            let files1 = list_dir_all(directory.path()).unwrap();
-            let files2 = list_dir_all(&unpack_dir).unwrap();
+            let files1 = list_dir_all(directory.path(), preserve_mtime);
+            let files2 = list_dir_all(&unpack_dir, preserve_mtime);
             similar_asserts::assert_eq!(files1, files2);
             Ok(())
         });
@@ -544,12 +589,23 @@ mod tests {
             remove_dir_all(&unpack_dir).ok();
             let reader = File::open(&cpio_path).unwrap();
             let mut archive = Archive::new(reader);
-            archive.preserve_mtime(true);
+            let preserve_mtime = false;
+            archive.preserve_mtime(preserve_mtime);
             archive.unpack(&unpack_dir).unwrap();
-            let files1 = list_dir_all(directory.path()).unwrap();
-            let files2 = list_dir_all(&unpack_dir).unwrap();
+            let files1 = list_dir_all(directory.path(), preserve_mtime);
+            let files2 = list_dir_all(&unpack_dir, preserve_mtime);
             similar_asserts::assert_eq!(files1, files2);
             Ok(())
         });
+    }
+
+    fn list_dir_all(path: &Path, preserve_mtime: bool) -> Vec<random_dir::FileInfo> {
+        let mut files = random_dir::list_dir_all(path).unwrap();
+        if !preserve_mtime {
+            for file in files.iter_mut() {
+                file.metadata.mtime = 0;
+            }
+        }
+        files
     }
 }

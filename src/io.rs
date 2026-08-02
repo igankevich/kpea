@@ -1,38 +1,12 @@
 use std::ffi::CStr;
-use std::ffi::OsStr;
 use std::io::Error;
 use std::io::ErrorKind;
 use std::io::Read;
 use std::io::Write;
-use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
-use std::path::PathBuf;
 use std::str::from_utf8;
 
 use crate::constants::*;
 use crate::Format;
-
-pub fn write_path<W: Write, P: AsRef<Path>>(
-    mut writer: W,
-    value: P,
-    format: Format,
-) -> Result<(), Error> {
-    let value = value.as_ref();
-    let bytes = value.as_os_str().as_bytes();
-    writer.write_all(bytes)?;
-    writer.write_all(&[0_u8])?;
-    write_path_padding(writer, bytes.len() + 1, format)?;
-    Ok(())
-}
-
-pub fn read_path_buf<R: Read>(mut reader: R, len: usize, format: Format) -> Result<PathBuf, Error> {
-    let mut buf = vec![0_u8; len];
-    reader.read_exact(&mut buf[..])?;
-    let c_str = CStr::from_bytes_with_nul(&buf).map_err(|_| ErrorKind::InvalidData)?;
-    read_path_padding(reader, len, format)?;
-    let os_str = OsStr::from_bytes(c_str.to_bytes());
-    Ok(os_str.into())
-}
 
 pub fn write_path_c_str<W: Write>(
     mut writer: W,
