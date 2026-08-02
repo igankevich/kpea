@@ -298,8 +298,7 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 [[package]]
 name = "random-dir"
 version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5dae31300414e307a592e5da7874cee7059998e2854a11dfea25a3fb00446251"
+source = "git+https://github.com/igankevich/random-dir?rev=3b0e09ab939e1479d54d255bb5cf63b2a96a535f#3b0e09ab939e1479d54d255bb5cf63b2a96a535f"
 dependencies = [
  "arbitrary",
  "arbtest",
