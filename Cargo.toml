@@ -3,14 +3,14 @@ name = "kpea"
 version.workspace = true
 edition = "2021"
 license.workspace = true
-homepage = "https://github.com/igankevich/kpea"
-repository = "https://github.com/igankevich/kpea"
+homepage.workspace = true
+repository.workspace = true
 documentation = "https://docs.rs/kpea"
 readme = "README.md"
 description = "CPIO archive reader/writer library. Supports New ASCII and Old character formats. Fuzz-tested against GNU cpio."
 keywords = ["cpio", "archive"]
 categories = ["encoding", "filesystem"]
-include = ["**/*.rs", "Cargo.toml", "README.md", "LICENSE"]
+include = ["**/*.rs", "Cargo.toml", "README.md", "LICENSE", "cargo-fast-install.jsonl"]
 
 [dependencies]
 libc = "0.2.180"
@@ -30,11 +30,13 @@ default-members = [".", "cli"]
 
 [workspace.package]
 license = "MIT"
-version = "0.4.0"
+version = "0.4.1"
+homepage = "https://github.com/igankevich/kpea"
+repository = "https://github.com/igankevich/kpea"
 
 [workspace.dependencies]
 random-dir = "0.3.2"
-cpio = { path = ".", package = "kpea", version = "0.4.0" }
+cpio = { path = ".", package = "kpea", version = "0.4.1" }
 
 [lints.clippy]
 unwrap_used = "deny"

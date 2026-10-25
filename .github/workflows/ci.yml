@@ -1,12 +1,16 @@
 ---
 name: CI
-on: [pull_request]
+on:
+  push:
+    branches: [master]
+  pull_request:
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref
     }}
   cancel-in-progress: true
 env:
   RUST_BACKTRACE: 1
+  RUST_VERSION: 1.92.0
   ARBTEST_BUDGET_MS: 10000
 jobs:
   ubuntu:
@@ -15,7 +19,7 @@ jobs:
       image: ghcr.io/igankevich/kpea-ci:latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4.1.4
+        uses: actions/checkout@v7
       - name: Init
         run: ./ci/init.sh
       - name: Lint
@@ -26,54 +30,18 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4.1.4
+        uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - run: cargo test --workspace --all-targets
   windows:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4.1.4
+        uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: Run tests
         shell: bash
-        run: |
+        run: |-
           set -e
           cargo test --lib
           cargo test --doc
-  publish-binaries:
-    needs: [ubuntu, macos, windows]
-    if: github.ref_type == 'tag'
-    permissions:
-      contents: write
-      packages: read
-    runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/igankevich/kpea-ci:latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4.1.4
-      - name: Init
-        run: ./ci/init.sh
-      - name: Build static binaries
-        run: ./ci/build.sh
-      - name: Create release
-        uses: actions/create-release@v1
-        id: create_release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref_name }}
-          release_name: Release ${{ github.ref_name }}
-          draft: false
-          prerelease: false
-      - name: Upload binaries
-        id: upload-release-asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./kpea-${{ github.ref_name }}.tar.gz
-          asset_name: kpea-${{ github.ref_name }}.tar.gz
-          asset_content_type: application/gzip
