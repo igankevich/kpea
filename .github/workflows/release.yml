@@ -6,7 +6,7 @@ on: pull_request
 env:
   RUST_VERSION: 1.92.0
 jobs:
-  publish-binaries:
+  release:
     permissions:
       contents: write
     runs-on: ubuntu-latest

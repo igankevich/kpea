@@ -12,8 +12,10 @@ update_cargo_fast_install() {
     git config user.name "$GITHUB_ACTOR via GH actions"
     git config user.email github-actions@github.com
     git add cargo-fast-install.jsonl
-    git commit -m "Update \`cargo-fast-install.jsonl\` for release $GITHUB_REF_NAME"
-    git push
+    if ! git diff --staged --exit-code >/dev/null; then
+        git commit -m "Update \`cargo-fast-install.jsonl\` for release $GITHUB_REF_NAME"
+        git push
+    fi
 }
 
 create_tag() {
@@ -27,6 +29,9 @@ print(json.loads(output.stdout)["packages"][0]["version"])
 EOF
     )"
     if test -n "$(git tag "$version")"; then
+        if test "$(git rev-list -n 1 "$version")" = "$(git rev-parse HEAD)"; then
+            return
+        fi
         printf "Git tag %s already exists\n" "$version" >&2
         exit 1
     fi
