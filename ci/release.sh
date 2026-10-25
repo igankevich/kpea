@@ -28,7 +28,7 @@ output = subprocess.run(["cargo", "metadata", "--format-version=1", "--no-deps"]
 print(json.loads(output.stdout)["packages"][0]["version"])
 EOF
     )"
-    if test -n "$(git tag "$version")"; then
+    if test -n "$(git tag --list "$version")"; then
         if test "$(git rev-list -n 1 "$version")" = "$(git rev-parse HEAD)"; then
             return
         fi
