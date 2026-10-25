@@ -1,1 +1,1 @@
-{"target": "x86_64-unknown-linux-musl", "binaries": ["kpea"], "url": "https://github.com/igankevich/kpea/releases/0.4.1/download/kpea-0.4.1.tar.gz", "hash": "44d1f8a65cd68e82086d13fb0e7a2fa0cf61b32ec8de8b5b4dba7bfa56ad7c15"}
+{"target": "x86_64-unknown-linux-musl", "binaries": ["kpea"], "url": "https://github.com/igankevich/kpea/releases/0.4.1/download/kpea-0.4.1.tar.gz", "hash": "3ee55e0ef42455a2c988066f9aef7e64dc3a9f85da96024a0203a828b1fb76c5"}
