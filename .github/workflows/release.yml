@@ -1,0 +1,29 @@
+---
+name: Release
+on: workflow_dispatch
+env:
+  RUST_VERSION: 1.92.0
+jobs:
+  publish-binaries:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Init
+        run: ./ci/init.sh
+      - name: Install Rust
+        run: ./ci/rust.sh
+      - name: Install cargo-fast-install
+        run: |
+          mkdir -p ~/.cargo/bin
+          cd ~/.cargo/bin
+          curl -fLO https://raw.githubusercontent.com/igankevich/cargo-fast-install/ce6ddeb4384672567fbf0ec5215f2e8d45419421/cargo-fast-install
+          chmod +x cargo-fast-install
+      - name: Build static binaries
+        run: ./ci/build.sh
+      - name: Create release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./ci/release.sh
