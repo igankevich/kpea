@@ -11,6 +11,7 @@ concurrency:
   cancel-in-progress: true
 env:
   RUST_BACKTRACE: 1
+  RUST_VERSION: 1.92.0
   ARBTEST_BUDGET_MS: 10000
 jobs:
   # ubuntu:
@@ -53,13 +54,13 @@ jobs:
       contents: write
       packages: read
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/igankevich/kpea-ci:latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4.1.4
       - name: Init
         run: ./ci/init.sh
+      - name: Install Rust
+        run: ./ci/rust.sh
       - name: Install cargo-fast-install
         run: |
           mkdir -p ~/.cargo/bin
