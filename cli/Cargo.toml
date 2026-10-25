@@ -3,6 +3,7 @@ name = "kpea-cli"
 version.workspace = true
 edition = "2021"
 license.workspace = true
+repository.workspace = true
 
 [[bin]]
 name = "kpea"

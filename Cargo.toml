@@ -3,8 +3,8 @@ name = "kpea"
 version.workspace = true
 edition = "2021"
 license.workspace = true
-homepage = "https://github.com/igankevich/kpea"
-repository = "https://github.com/igankevich/kpea"
+homepage.workspace = true
+repository.workspace = true
 documentation = "https://docs.rs/kpea"
 readme = "README.md"
 description = "CPIO archive reader/writer library. Supports New ASCII and Old character formats. Fuzz-tested against GNU cpio."
@@ -31,6 +31,8 @@ default-members = [".", "cli"]
 [workspace.package]
 license = "MIT"
 version = "0.4.1"
+homepage = "https://github.com/igankevich/kpea"
+repository = "https://github.com/igankevich/kpea"
 
 [workspace.dependencies]
 random-dir = "0.3.2"
