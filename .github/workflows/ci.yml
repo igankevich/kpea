@@ -65,7 +65,7 @@ jobs:
         run: |
           mkdir -p ~/.cargo/bin
           cd ~/.cargo/bin
-          curl -fLO https://raw.githubusercontent.com/igankevich/cargo-fast-install/3a291bf80d1238182e2aece97af04d6de02b6909/cargo-fast-install
+          curl -fLO https://raw.githubusercontent.com/igankevich/cargo-fast-install/ce6ddeb4384672567fbf0ec5215f2e8d45419421/cargo-fast-install
           chmod +x cargo-fast-install
       - name: Build static binaries
         run: ./ci/build.sh
