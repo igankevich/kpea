@@ -1,9 +1,14 @@
 [package]
 name = "kpea-cli"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 license.workspace = true
 repository.workspace = true
+readme = "README.md"
+description = "CPIO archive reader/writer tool. Supports New ASCII and Old character formats. Fuzz-tested against GNU cpio."
+keywords = ["cpio", "archive"]
+categories = ["encoding", "filesystem", "command-line-utilities"]
+include = ["**/*.rs", "Cargo.toml", "README.md", "cargo-fast-install.jsonl"]
 
 [[bin]]
 name = "kpea"

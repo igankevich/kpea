@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+#![doc(hidden)]
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Error;

@@ -11,9 +11,9 @@ main() {
 update_cargo_fast_install() {
     git config user.name "$GITHUB_ACTOR via GH actions"
     git config user.email github-actions@github.com
-    git add cargo-fast-install.jsonl
+    git add cli/cargo-fast-install.jsonl
     if ! git diff --staged --exit-code >/dev/null; then
-        git commit -m "Update \`cargo-fast-install.jsonl\` for release $GITHUB_REF_NAME"
+        git commit -m "Update \`cli/cargo-fast-install.jsonl\` for release $GITHUB_REF_NAME"
         git push
     fi
 }

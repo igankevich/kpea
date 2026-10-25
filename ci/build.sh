@@ -16,4 +16,5 @@ cargo-fast-install \
     --release \
     --target "$target" \
     --package kpea-cli \
-    --url "{crate.repository}/releases/{crate.version}/download/kpea-{crate.version}.tar.gz"
+    --url "{crate.repository}/releases/download/{crate.version}/kpea-{crate.version}.tar.gz"
+mv -v cargo-fast-install.jsonl cli/
