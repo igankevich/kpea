@@ -43,7 +43,8 @@ jobs:
           cargo test --doc
   publish-binaries:
     needs: [ubuntu, macos, windows]
-    if: github.ref_type == 'tag'
+    # TODO
+    # if: github.ref_type == 'tag'
     permissions:
       contents: write
       packages: read
@@ -55,6 +56,11 @@ jobs:
         uses: actions/checkout@v4.1.4
       - name: Init
         run: ./ci/init.sh
+      - name: Install cargo-fast-install
+        run: |
+          cd ~/.cargo/bin
+          curl -fLO https://raw.githubusercontent.com/igankevich/cargo-fast-install/3a291bf80d1238182e2aece97af04d6de02b6909/cargo-fast-install
+          chmod +x cargo-fast-install
       - name: Build static binaries
         run: ./ci/build.sh
       - name: Create release
@@ -65,7 +71,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           release_name: Release ${{ github.ref_name }}
-          draft: false
+          draft: true
           prerelease: false
       - name: Upload binaries
         id: upload-release-asset
