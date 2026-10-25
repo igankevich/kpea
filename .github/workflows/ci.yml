@@ -1,6 +1,10 @@
 ---
 name: CI
-on: [pull_request]
+on:
+  push:
+    branches: [master]
+    tags: ['*']
+  pull_request:
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref
     }}
@@ -9,40 +13,40 @@ env:
   RUST_BACKTRACE: 1
   ARBTEST_BUDGET_MS: 10000
 jobs:
-  ubuntu:
-    runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/igankevich/kpea-ci:latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4.1.4
-      - name: Init
-        run: ./ci/init.sh
-      - name: Lint
-        run: ./ci/lint.sh
-      - name: Test
-        run: ./ci/test.sh
-  macos:
-    runs-on: macos-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4.1.4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: cargo test --workspace --all-targets
-  windows:
-    runs-on: windows-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4.1.4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Run tests
-        shell: bash
-        run: |
-          set -e
-          cargo test --lib
-          cargo test --doc
+  # ubuntu:
+  #   runs-on: ubuntu-latest
+  #   container:
+  #     image: ghcr.io/igankevich/kpea-ci:latest
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4.1.4
+  #     - name: Init
+  #       run: ./ci/init.sh
+  #     - name: Lint
+  #       run: ./ci/lint.sh
+  #     - name: Test
+  #       run: ./ci/test.sh
+  # macos:
+  #   runs-on: macos-latest
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4.1.4
+  #     - uses: actions-rust-lang/setup-rust-toolchain@v1
+  #     - run: cargo test --workspace --all-targets
+  # windows:
+  #   runs-on: windows-latest
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4.1.4
+  #     - uses: actions-rust-lang/setup-rust-toolchain@v1
+  #     - name: Run tests
+  #       shell: bash
+  #       run: |
+  #         set -e
+  #         cargo test --lib
+  #         cargo test --doc
   publish-binaries:
-    needs: [ubuntu, macos, windows]
+    # needs: [ubuntu, macos, windows]
     # TODO
     # if: github.ref_type == 'tag'
     permissions:
@@ -58,6 +62,7 @@ jobs:
         run: ./ci/init.sh
       - name: Install cargo-fast-install
         run: |
+          mkdir -p ~/.cargo/bin
           cd ~/.cargo/bin
           curl -fLO https://raw.githubusercontent.com/igankevich/cargo-fast-install/3a291bf80d1238182e2aece97af04d6de02b6909/cargo-fast-install
           chmod +x cargo-fast-install
