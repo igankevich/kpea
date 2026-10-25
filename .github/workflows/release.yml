@@ -1,8 +1,6 @@
 ---
 name: Release
-# TODO
-# on: workflow_dispatch
-on: pull_request
+on: workflow_dispatch
 env:
   RUST_VERSION: 1.92.0
 jobs:
